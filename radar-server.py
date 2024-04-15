@@ -24,6 +24,7 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from obs_placefile import Mesowest
 from get_nexrad import NexradDownloader
+from nse_placefiles import make_nse_placefiles
 import layout_components as lc
 
 # --------------------------------------------------------
@@ -166,6 +167,33 @@ app.layout = dbc.Container([
 
     #lc.show_radar_section,
     lc.map_toggle, lc.graph_section, lc.scripts_button, #lc.store_settings_section,
+
+     # Alert banners? Likely move to layout_components, but here for now to test application. 
+    html.Div([
+        dbc.Row([
+            dbc.Col(
+                html.Div([
+                    dbc.Alert(
+                        f'Warning: No RAP data was found for this request. NSE '
+                        f'Placefiles will not available for this simulation.',
+                        id='model-data-alert',
+                        dismissable=True,
+                        is_open=False,
+                        color='warning',
+                    ),
+                    #dbc.Alert(
+                    #    'Some other alert',
+                    #    id='some-other-alert',
+                    #    dismissable=True,
+                    #    is_open=False,
+                    #    color='warning'
+                    #),
+                ], className="d-grid gap-2"), style={'vertical-align':'middle'}),
+        ]),
+    ], 
+    style={'padding':'1em', 'vertical-align':'middle'}
+    ),
+
     lc.toggle_simulation_clock, lc.simulation_clock, lc.radar_id, lc.bottom_section
     ])  # end of app.layout
 
@@ -197,16 +225,20 @@ def run_hodo_script(args):
 
 @app.callback(
     Output('show_script_progress', 'children', allow_duplicate=True),
+    Output('model-data-alert', 'is_open', allow_duplicate=True),
     [Input('run_scripts', 'n_clicks')],
-    prevent_initial_call=True)
+    prevent_initial_call=True,
+    running=[(Output('run_scripts', 'disabled'), True, False)]
+)
 def launch_obs_script(n_clicks):
     if n_clicks > 0:
         try:
             run_obs_nexrad_scripts()
+            model_alert = make_nse_placefiles(sa.sim_start, sa.sim_end, sa.scripts_path)
         except Exception as e:
             print("Error running scripts: ", e)
-    else:
-        return ""
+        ret = "Finished", model_alert
+    return ret
 
 # ---------------------------------------- Clock Callbacks ----------------------------------------
 
@@ -319,4 +351,5 @@ def get_duration(duration):
 
 
 if __name__ == '__main__':
-    app.run_server(debug=True, port=8050, threaded=True)
+    #app.run_server(debug=True, port=8050, threaded=True)
+    app.run_server(debug=True, host='127.0.0.1')    # Needed on Mac for dev t

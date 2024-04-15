@@ -283,8 +283,13 @@ def download_data(dts, data_path, model='RAP', num_hours=1):
     if knt == expected_files:
         return_status = True
         log.info("Success downloading files or already on the filesystem")
+    elif 0 < knt < expected_files:
+        log.warning("Partial download. Expected {expected_files} but found {knt}")
+        sys.exit(2)
     else:
+        # No data case. Exit with errors. 
         log.error("Expected %s files but found %s" % (expected_files, knt))
+        sys.exit(1)
 
     return return_status, download_dir
 
