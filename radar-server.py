@@ -19,12 +19,25 @@ from botocore.client import Config
 import dash
 # State allows the user to enter input before proceeding
 from dash import html, dcc, Input, Output
+from dash import DiskcacheManager, CeleryManager
 from dash.exceptions import PreventUpdate
 # bootstrap is what helps styling for a better presentation
 import dash_bootstrap_components as dbc
 from obs_placefile import Mesowest
 from get_nexrad import NexradDownloader
 import layout_components as lc
+
+if 'REDIS_URL' in os.environ:
+    # Use Redis & Celery if REDIS_URL set as an env variable
+    from celery import Celery
+    celery_app = Celery(__name__, broker=os.environ['REDIS_URL'], backend=os.environ['REDIS_URL'])
+    background_callback_manager = CeleryManager(celery_app)
+
+else:
+    # Diskcache for non-production apps when developing locally
+    import diskcache
+    cache = diskcache.Cache("./cache")
+    background_callback_manager = DiskcacheManager(cache)
 
 # --------------------------------------------------------
 #       Define class RadarSimulator
@@ -143,7 +156,8 @@ class RadarSimulator(Config):
 # --------------------------------------------------------
 
 sa = RadarSimulator()
-app = dash.Dash(__name__,external_stylesheets=[dbc.themes.CYBORG], suppress_callback_exceptions=True)
+app = dash.Dash(__name__,external_stylesheets=[dbc.themes.CYBORG], suppress_callback_exceptions=True,
+                background_callback_manager=background_callback_manager)
 app.title = "Radar Simulator"
 
 # --------------------------------------------------------
@@ -319,4 +333,5 @@ def get_duration(duration):
 
 
 if __name__ == '__main__':
-    app.run_server(debug=True, port=8050, threaded=True)
+    #app.run_server(debug=True, port=8050, threaded=True)
+    app.run_server(debug=True, host='127.0.0.1', port=8050)
