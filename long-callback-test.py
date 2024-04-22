@@ -1,7 +1,23 @@
+"""
+All 4 background callbacks are linked to the same input (click of the Run Scripts 
+button). Can't figure out how to keep the button set to "disabled=True" until all 
+associated scripts have completed. Currently, it will become active ("disabled=False")
+as soon aas the shortest-running background callback completes. Same thing with the 
+Cancel button. 
+    - Possible the Run Script button could just be disabled once it's clicked. Do
+      we need to allow for multiple runs? Currently, this is how I've set things.
+    - Need to ensure there's no way for a single user to dispatch numerous processes
+      by making multiple button clicks.
+
+Background callbacks offer ability to cancel running code -- haven't found this 
+available with anything else. 
+"""
+
 import time
 from uuid import uuid4
 import diskcache
-from dash import Dash, html, DiskcacheManager, CeleryManager, Input, Output, dcc
+from dash import Dash, html, DiskcacheManager, CeleryManager, Input, Output, State, dcc, ctx
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from datetime import datetime, timedelta 
 import subprocess
@@ -105,7 +121,7 @@ class RadarSimulator(Config):
 
 
 launch_uid = uuid4()
-cache = diskcache.Cache("./cache")
+cache = diskcache.Cache('./cache')
 
 background_callback_manager = DiskcacheManager(
     cache, cache_by=[lambda: launch_uid], expire=60
@@ -116,156 +132,225 @@ app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
            background_callback_manager=background_callback_manager)
 
 app.layout = dbc.Container([
-    dcc.Store(id='dummy1'), 
-    dcc.Store(id='dummy2'), 
-    dcc.Store(id='dummy3'), 
-    dcc.Store(id='dummy4'),
+    dcc.Interval(id='status_monitor', interval=1000),
+    dcc.Store(id='placefile_callback_status'), 
+    dcc.Store(id='radar_callback_status'), 
+    dcc.Store(id='hodo_callback_status'), 
+    dcc.Store(id='nse_callback_status'),
     lc.scripts_button,
     lc.status_section,
     html.Button(id='cancel_button_id', children='Cancel all requests'),
     ])  # end of app.layout
 
-def calculate_percent_progress(iteration, total):
+
+def percent_progress(iteration, total):
     percent = int((iteration / total) * 100)
-    f_percent = f"{int(percent)} %"
-    return percent, f_percent
+    return percent
 
-
-def slow_process_1(set_progress):
+def create_mesowest(set_progress):
     """
     """
+    #Mesowest(sa.radar,str(sa.lat),str(sa.lon),sa.sim_start_str,str(sa.duration))
+    total = 5
+    for i in range(total):
+        time.sleep(0.5)
+        percent = percent_progress(iteration=i+1, total=total)
+        set_progress([int(percent), f"{int(percent)} %"])
+
+def get_radar(set_progress):
+    """
+    """
+    #NexradDownloader(sa.radar, sa.sim_start_str, sa.duration)
     total = 10
     for i in range(total):
         time.sleep(0.5)
-        percent, f_percent = calculate_percent_progress(iteration=i+1, total=total)
+        percent = percent_progress(iteration=i+1, total=total)
         set_progress([int(percent), f"{int(percent)} %"])
 
-def slow_process_2(set_progress):
+def create_hodographs(set_progress):
     """
     """
-    total = 20
+    total = 15
     for i in range(total):
         time.sleep(0.5)
-        percent, f_percent = calculate_percent_progress(iteration=i+1, total=total)
+        percent = percent_progress(iteration=i+1, total=total)
         set_progress([int(percent), f"{int(percent)} %"])
 
-def slow_process_3(set_progress):
+def create_nse_placefiles(set_progress):
     """
     """
-    total = 30
-    for i in range(total):
+    proceed = True
+    knt = 0
+    while proceed:
         time.sleep(0.5)
-        percent, f_percent = calculate_percent_progress(iteration=i+1, total=total)
+        try:
+            with open(f'{sa.data_dir}/download_status.txt', 'r') as f: 
+               status = f.readlines()[0].split(',')
+        except FileNotFoundError:
+            status = ['0', '999', '0\n']
+        except IndexError:
+            pass
+        percent = percent_progress(iteration=int(status[2]), total=int(status[1]))
         set_progress([int(percent), f"{int(percent)} %"])
-    print("end of slow_process_3")
 
-def slow_process_4(set_progress):
-    """
-    """
-    total = 50
-    for i in range(total):
-        time.sleep(0.5)
-        percent, f_percent = calculate_percent_progress(iteration=i+1, total=total)
-        set_progress([int(percent), f"{int(percent)} %"])
+        # Temporary hack for testing.
+        if percent > 99:
+            proceed=False
+
+        knt += 1
 
 # Long callback 1 for mesowest placefiles
 @app.callback(
-    Output("dummy1", "data"),
-    Input("run_scripts", "n_clicks"),
+    Output('placefile_callback_status', 'data', allow_duplicate=True),
+    Input('run_scripts', 'n_clicks'),
     running=[
-        (Output("run_scripts", "disabled"), True, False),
-        (Output("cancel_button_id", "disabled"), False, True),
+        (Output('run_scripts', 'disabled'), True, True),
+        (Output('cancel_button_id', 'disabled'), False, False),
     ],
-    cancel=[Input("cancel_button_id", "n_clicks")],
+    cancel=[Input('cancel_button_id', 'n_clicks')],
     progress=[
-        Output("placefile_status", "value"),
-        Output("placefile_status", "label"),
+        Output('placefile_status', 'value'),
+        #Output("placefile_status", "label"),
     ],
     interval=1000,
     background=True,
     prevent_initial_call=True
 )
-def launch_mesowest(set_progress, n_clicks):
+def mesowest(set_progress, n_clicks):
     if n_clicks > 0:
-        #Mesowest(sa.radar,str(sa.lat),str(sa.lon),sa.sim_start_str,str(sa.duration))
-        slow_process_1(set_progress) 
-    return
+        create_mesowest(set_progress) 
+    return True
 
 # Long callback 2 for radar downloads
 @app.callback(
-    Output("dummy2", "data"),
-    Input("run_scripts", "n_clicks"),
+    Output('radar_callback_status', 'data', allow_duplicate=True),
+    Input('run_scripts', 'n_clicks'),
     running=[
-        (Output("run_scripts", "disabled"), True, False),
-        (Output("cancel_button_id", "disabled"), False, True),
+        (Output('run_scripts', 'disabled'), True, True),
+        (Output('cancel_button_id', 'disabled'), False, False),
     ],
-    cancel=[Input("cancel_button_id", "n_clicks")],
+    cancel=[Input('cancel_button_id', 'n_clicks')],
     progress=[
-        Output("radar_status", "value"),
-        Output("radar_status", "label"),
+        Output('radar_status', 'value'),
+        #Output("radar_status", "label"),
     ],
     interval=1000,
     background=True,
     prevent_initial_call=True
 )
-def get_nexrad(set_progress, n_clicks):
+def radar(set_progress, n_clicks):
     if n_clicks > 0:
-        #NexradDownloader(sa.radar, sa.sim_start_str, sa.duration)
-        slow_process_2(set_progress) 
-    return
+        get_radar(set_progress) 
+    return True
 
 # Long callback 3 for hodographs
 @app.callback(
-    Output("dummy3", "data"),
-    Input("run_scripts", "n_clicks"),
+    Output('hodo_callback_status', 'data', allow_duplicate=True),
+    Input('run_scripts', 'n_clicks'),
     running=[
-        (Output("run_scripts", "disabled"), True, False),
-        (Output("cancel_button_id", "disabled"), False, True),
+        (Output('run_scripts', 'disabled'), True, True),
+        (Output('cancel_button_id', 'disabled'), False, False),
     ],
-    cancel=[Input("cancel_button_id", "n_clicks")],
+    cancel=[Input('cancel_button_id', 'n_clicks')],
     progress=[
-        Output("hodo_status", "value"),
-        Output("hodo_status", "label"),
+        Output('hodo_status', 'value'),
+        #Output("hodo_status", "label"),
     ],
     interval=1000,
     background=True,
     prevent_initial_call=True
 )
-def create_hodographs(set_progress, n_clicks):
+def hodographs(set_progress, n_clicks):
     if n_clicks > 0:
-        #run_hodo_script([sa.radar.upper()])
-        slow_process_3(set_progress) 
-    return
+        create_hodographs(set_progress) 
+    return True
 
 # Long callback 4 for NSE placefiles
 @app.callback(
-    Output("dummy4", "data"),
-    Input("run_scripts", "n_clicks"),
+    Output('nse_callback_status', 'data', allow_duplicate=True),
+    Input('run_scripts', 'n_clicks'),
     running=[
-        (Output("run_scripts", "disabled"), True, False),
-        (Output("cancel_button_id", "disabled"), False, True),
+        (Output('run_scripts', 'disabled'), True, True),
+        (Output('cancel_button_id', 'disabled'), False, False),
     ],
-    cancel=[Input("cancel_button_id", "n_clicks")],
+    cancel=[Input('cancel_button_id', 'n_clicks')],
     progress=[
-        Output("nse_status", "value"),
-        Output("nse_status", "label"),
+        Output('nse_status', 'value'),
+        #Output('nse_status', 'label'),
     ],
     interval=1000,
     background=True,
     prevent_initial_call=True
 )
-def create_placefiles(set_progress, n_clicks):
+def nse_placefiles(set_progress, n_clicks):
     if n_clicks > 0:
+        try:
+            os.remove(f'{sa.data_dir}/download_status.txt')
+        except FileNotFoundError:
+            pass 
         #start_string = datetime.strftime(sa.sim_start,"%Y-%m-%d/%H")
         #end_string = datetime.strftime(sa.sim_end,"%Y-%m-%d/%H")
-        start_string = "2024-04-21/00"
-        end_string = "2024-04-21/02"
+        # Temporary values for testing. 
+        start_string = "2024-04-20/01"
+        end_string = "2024-04-20/03"
         args = f"-s {start_string} -e {end_string} -statuspath {sa.data_dir}".split()
-        #get_data_status = subprocess.run(
-        #    ["python", f"./scripts/meso/get_data.py"] + args
-        #)
-        slow_process_4(set_progress) 
-    return
+
+        # Non-blocking call via Popen to the necessary python scripts
+        subprocess.Popen(["python", f"{sa.scripts_path}/meso/get_data.py"] + args)
+        create_nse_placefiles(set_progress) 
+
+        # Once create_nse_placefiles returns, the next process to produce the placefiles
+        # can be dispatched. Need someway to show we've moved to this next step with the 
+        # status bar. Currently, fills to 100% with completion of the step above. 
+        args = f"-s {start_string} -e {end_string} -meso".split()
+        #subprocess.Popen(["python", f"{sa.scripts_path}/meso/process.py"] + args)
+    
+    return True
+
+# This callback is initiated by dcc.Interval and monitors the return status of each of 
+# the primary background callbacks. Once every process has returned, the run scripts 
+# button is returned to disabled=False and cancellation button to disabled=True. Without 
+# this callback, the button disabled states are changed as soon as the first/fastest
+# background callback returns, and I can't find a way to avoid that. 
+
+# Ultimately, this step might not be necessary--we could just turn the run scripts button
+# off entirely after the initial click. 
+
+# Main issue: for some reason, you have to click the Cancel button twice (after a brief
+# delay between each click). Not sure what's going on there.
+@app.callback(
+    Output('run_scripts', 'disabled'),
+    Output('cancel_button_id', 'disabled'),
+    Output('placefile_callback_status', 'data', allow_duplicate=True),
+    Output('radar_callback_status', 'data', allow_duplicate=True),
+    Output('hodo_callback_status', 'data', allow_duplicate=True),
+    Output('nse_callback_status', 'data', allow_duplicate=True),
+    Input('status_monitor', 'n_intervals'),
+    Input('run_scripts', 'n_clicks'),
+    Input('cancel_button_id', 'n_clicks'),
+    State('placefile_callback_status', 'data'),
+    State('radar_callback_status', 'data'),
+    State('hodo_callback_status', 'data'),
+    State('nse_callback_status', 'data'),
+    prevent_initial_call=True,
+)
+def monitor(n, run_click, cancel_click, mesowest, radar, hodo, nse):
+    # Probably also want something checking how long each of the processes has been
+    # running and to cancel if we're over a certain limit. Create a datetime object 
+    # within each callback? 
+
+    # Run scripts button was clicked 
+    # Set the run button to disabled and cancel button to enabled
+    if ctx.triggered[0]['prop_id'] == 'run_scripts.n_clicks':
+        return True, False, False, False, False, False 
+    
+    # !! For some reason, have to hit cancel button twice?? Can't figure that out.. 
+    # Cancel button was clicked, or all background callbacks have completed
+    # Set the run button to enabled and cancel button to disabled
+    if ctx.triggered[0]['prop_id'] == 'cancel_button_id.n_clicks' or all([mesowest, radar, hodo, nse]):
+        return False, True, False, False, False, False 
+
+    raise PreventUpdate 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1")
+    app.run(debug=True, host='127.0.0.1')
