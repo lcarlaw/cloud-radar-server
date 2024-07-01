@@ -1,7 +1,8 @@
-from numba import njit
+from numba import njit, types
 from numba.experimental import jitclass
 from numba import int32, float64
 from numba import vectorize
+from numba.typed import Dict
 
 import numpy as np
 import numpy.ma as ma
@@ -10,8 +11,18 @@ from sharptab import interp
 from sharptab import thermo
 from sharptab import utils
 from sharptab import winds
+from sharptab import profile
 
 from .constants import *
+
+#########################################################################################
+# Ahead-of-time compilation of the parcelx function. Need to ensure CC environment 
+# variable is the same as the one used to compile the numpy.disutils package. 
+# Running this with python -m sharptab.params will produce a file called parcelx_module
+# within the sharptab folder which will be read in during NSE execution.
+from numba.pycc import CC
+cc = CC('parcelx_module')
+#########################################################################################
 
 spec = [
     ("flag", int32),
@@ -225,8 +236,524 @@ class DefineParcel(object):
     """
 
 
+@cc.export('parcelx', 'DictType(unicode_type, f8)(f8[:],f8[:],f8[:],f8[:],f8[:],f8[:],i4)')
+def parcelx(pres, tmpc, dwpc, wspd, wdir, hght, flag):
+    """
+    !! Re-written July 2024 to take in vectors as opposed to a profile object to allow for 
+    ahead-of-time compilation with numba !!
+
+    Lifts the specified parcel, calculates various levels and parameters from the
+    profile object. B+/B- are calculated based on the specified layer. Such parameters
+    include CAPE, CIN, LCL height, LFC height, buoyancy minimum. EL height, MPL height.
+
+    !! All calculations use the virtual temperature correction unless noted. !!
+
+    Parameters
+    ----------
+    prof : profile object
+        Profile Object
+    flag : number (optional; default = 5)
+        Flag to determine what kind of parcel to create; See DefineParcel for
+        flag values
+
+    Returns
+    -------
+        Parcel Object
+    """
+    dp = -1
+    pcl = Dict.empty(
+        key_type=types.unicode_type,
+        value_type=types.float64,
+    )
+    prof = profile.create_profile(pres, tmpc, dwpc, wspd, wdir, hght)
+
+    LPLVALS = DefineParcel(prof, flag)
+
+    # Variables
+    pres = LPLVALS.pres
+    tmpc = LPLVALS.tmpc
+    dwpc = LPLVALS.dwpc
+    # pcl.lplhght = interp.to_agl(prof, interp.hght(prof, pres))
+    pcl['lplhght'] = interp.hght(prof, pres)
+    pcl['pres'] = pres
+    pcl['tmpc'] = tmpc
+    pcl['dwpc'] = dwpc
+
+    # cap_strength = -9999.
+    # cap_strengthpres = -9999.
+    # li_max = -9999.
+    # li_maxpres = -9999.
+    totp = 0.0
+    totn = 0.0
+    tote = 0.0
+    cinh_old = 0.0
+
+    # See if default layer is specified
+
+    pbot = prof.pres[prof.sfc]
+    pcl['blayer'] = pbot
+    pcl['pbot'] = pbot
+
+    ptop = prof.pres[prof.pres.shape[0] - 1]
+    pcl['tlayer'] = ptop
+    pcl['ptop'] = ptop
+
+    # Make sure this is a valid layer
+    if pbot > pres:
+        pbot = pres
+        pcl['blayer'] = pbot
+
+    # if type(interp.vtmp(prof, pbot)) == type(ma.masked) or type(interp.vtmp(prof, ptop)) == type(ma.masked):
+    #    return pcl
+
+    # Begin with the Mixing Layer
+    pe1 = pbot
+    h1 = interp.hght(prof, pe1)
+    tp1 = thermo.virtemp(pres, tmpc, dwpc)
+    ttrace = [tp1]
+    ptrace = [pe1]
+
+    # Lift parcel and return LCL pres (hPa) and LCL temp (C)
+    pe2, tp2 = thermo.drylift(pres, tmpc, dwpc)
+
+    # CALCS SAME TO HERE...
+
+    # if type(pe2) == type(ma.masked) or np.isnan(pe2):
+    #    return pcl
+    blupper = pe2
+    h2 = interp.hght(prof, pe2)
+    te2 = interp.vtmp(prof, pe2)
+
+    pcl['lclpres'] = min(pe2, prof.pres[prof.sfc])  # Make sure the LCL pressure is
+    # never below the surface
+    pcl['lclhght'] = interp.to_agl(prof, h2)
+
+    ptrace.append(pe2)
+    ttrace.append(thermo.virtemp(pe2, tp2, tp2))
+
+    # Calculate lifted parcel theta for use in iterative CINH loop below
+    # RECALL: lifted parcel theta is CONSTANT from LPL to LCL
+    theta_parcel = thermo.theta(pe2, tp2, 1000.0)
+
+    # Environmental theta and mixing ratio at LPL
+    bltheta = thermo.theta(pres, interp.temp(prof, pres), 1000.0)
+    blmr = thermo.mixratio(pres, dwpc)
+
+    # ACCUMULATED CINH IN THE MIXING LAYER BELOW THE LCL
+    # This will be done in 'dp' increments and will use the virtual
+    # temperature correction where possible
+    pp = np.arange(pbot, blupper + dp, dp, dtype=type(pbot))
+    hh = interp.hght(prof, pp)
+    tmp_env_theta = thermo.theta(pp, interp.temp(prof, pp), 1000.0)
+    tmp_env_dwpt = interp.dwpt(prof, pp)
+    tv_env = thermo.virtemp(pp, tmp_env_theta, tmp_env_dwpt)
+    tmp1 = thermo.virtemp(pp, theta_parcel, thermo.temp_at_mixrat(blmr, pp))
+    tdef = (tmp1 - tv_env) / thermo.ctok(tv_env)
+    # tdef = np.divide((tmp1 - tv_env), thermo.ctok(tv_env))
+
+    tidx1 = np.arange(0, len(tdef) - 1, 1)
+    tidx2 = np.arange(1, len(tdef), 1)
+    lyre = G * (tdef[tidx1] + tdef[tidx2]) / 2 * (hh[tidx2] - hh[tidx1])
+    # lyre = np.divide(G * (tdef[tidx1]+tdef[tidx2]),  2 * (hh[tidx2]-hh[tidx1]))
+    totn = lyre[lyre < 0].sum()
+    if not totn:
+        totn = 0.0
+
+    # Move the bottom layer to the top of the boundary layer
+    if pbot > pe2:
+        pbot = pe2
+        pcl['blayer'] = pbot
+
+    # Calculate height of various temperature levels
+    #p0c = temp_lvl(prof, 0.)
+
+    #pm10c = temp_lvl(prof, -10.)
+    #pm20c = temp_lvl(prof, -20.)
+    #pm30c = temp_lvl(prof, -30.)
+    #hgt0c = interp.hght(prof, p0c)
+
+    #hgtm10c = interp.hght(prof, pm10c)
+    #hgtm20c = interp.hght(prof, pm20c)
+    #hgtm30c = interp.hght(prof, pm30c)
+    #pcl.p0c = p0c
+    #pcl.pm10c = pm10c
+    #pcl.pm20c = pm20c
+    #pcl.pm30c = pm30c
+    #pcl.hght0c = hgt0c
+
+    #pcl.hghtm10c = hgtm10c
+    #pcl.hghtm20c = hgtm20c
+    #pcl.hghtm30c = hgtm30c
+
+    if pbot < prof.pres[-1]:
+        # Check for the case where the LCL is above the
+        # upper boundary of the data (e.g. a dropsonde)
+        return pcl
+
+    # Find lowest observation in layer
+    lptr = np.where(pbot >= prof.pres)[0].min()
+    uptr = np.where(ptop <= prof.pres)[0].max()
+
+    # START WITH INTERPOLATED BOTTOM LAYER
+    # Begin moist ascent from lifted parcel LCL (pe2, tp2)
+    pe1 = pbot
+    h1 = interp.hght(prof, pe1)
+    te1 = interp.vtmp(prof, pe1)
+
+    tp1 = thermo.wetlift3(pe2, tp2, pe1)
+
+    lyre = 0
+    lyrlast = 0
+
+    iter_ranges = np.arange(lptr, prof.pres.shape[0])
+    ttraces = np.zeros(len(iter_ranges))
+    ptraces = np.zeros(len(iter_ranges))
+
+    for i in iter_ranges:
+        pe2 = prof.pres[i]
+        h2 = prof.hght[i]
+        te2 = prof.vtmp[i]
+        tp2 = thermo.wetlift3(pe1, tp1, pe2)
+        tdef1 = (thermo.virtemp(pe1, tp1, tp1) - te1) / thermo.ctok(te1)
+        # tdef1 = np.divide((thermo.virtemp(pe1, tp1, tp1) - te1), thermo.ctok(te1))
+        tdef2 = (thermo.virtemp(pe2, tp2, tp2) - te2) / thermo.ctok(te2)
+        # tdef2 = np.divide((thermo.virtemp(pe2, tp2, tp2) - te2), thermo.ctok(te2))
+
+        ptraces[i - iter_ranges[0]] = pe2
+        ttraces[i - iter_ranges[0]] = thermo.virtemp(pe2, tp2, tp2)
+        lyrlast = lyre
+        lyre = G * (tdef1 + tdef2) / 2.0 * (h2 - h1)
+        # lyre = np.divide(G * (tdef1 + tdef2), 2. * (h2 - h1))
+
+        # print(pe1, pe2, te1, te2, tp1, tp2, lyre, totp, totn)
+
+        # Add layer energy to total positive if lyre > 0
+        if lyre > 0:
+            totp += lyre
+        # Add layer energy to total negative if lyre < 0, only up to EL
+        else:
+            if pe2 > 500.0:
+                totn += lyre
+
+        # Check for Max LI
+        # mli = thermo.virtemp(pe2, tp2, tp2) - te2
+        # if  mli > li_max:
+        #    li_max = mli
+        #    li_maxpres = pe2
+
+        # Check for Max Cap Strength
+        # mcap = te2 - mli
+        # if mcap > cap_strength:
+        #    cap_strength = mcap
+        #    cap_strengthpres = pe2
+
+        tote += lyre
+        pelast = pe1
+        pe1 = pe2
+        te1 = te2
+        tp1 = tp2
+
+        # Is this the top of the specified layer
+        if i >= uptr:
+            pe3 = pe1
+            h3 = h2
+            te3 = te1
+            tp3 = tp1
+            lyrf = lyre
+            if lyrf > 0:
+                pcl['bplus'] = totp - lyrf
+                pcl['bminus'] = totn
+            else:
+                pcl['bplus'] = totp
+                if pe2 > 500.0:
+                    pcl['bminus'] = totn + lyrf
+                else:
+                    pcl['bminus'] = totn
+            pe2 = ptop
+            h2 = interp.hght(prof, pe2)
+            te2 = interp.vtmp(prof, pe2)
+            tp2 = thermo.wetlift3(pe3, tp3, pe2)
+            tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / thermo.ctok(te3)
+            tdef2 = (thermo.virtemp(pe2, tp2, tp2) - te2) / thermo.ctok(te2)
+            lyrf = G * (tdef3 + tdef2) / 2.0 * (h2 - h3)
+
+            # tdef3 = np.divide((thermo.virtemp(pe3, tp3, tp3) - te3), thermo.ctok(te3))
+            # tdef2 = np.divide((thermo.virtemp(pe2, tp2, tp2) - te2), thermo.ctok(te2))
+            # lyrf = np.divide(G * (tdef3 + tdef2), 2. * (h2 - h3))
+
+            if lyrf > 0:
+                pcl['bplus'] += lyrf
+            else:
+                if pe2 > 500.0:
+                    pcl['bminus'] += lyrf
+            if pcl['bplus'] == 0:
+                pcl['bminus'] = 0.0
+
+        # Is this the freezing level
+        if te2 < 0.0:
+            pe3 = pelast
+            h3 = interp.hght(prof, pe3)
+            te3 = interp.vtmp(prof, pe3)
+            tp3 = thermo.wetlift3(pe1, tp1, pe3)
+            lyrf = lyre
+            # if lyrf > 0.: pcl.bfzl = totp - lyrf
+            # else: pcl.bfzl = totp
+            # if p0c > pe3:
+            #    pcl.bfzl = 0
+
+            # elif utils.QC(pe2):
+            #    te2 = interp.vtmp(prof, pe2)
+            #    tp2 = thermo.wetlift(pe3, tp3, pe2)
+            #    tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / \
+            #        thermo.ctok(te3)
+            #    tdef2 = (thermo.virtemp(pe2, tp2, tp2) - te2) / \
+            #        thermo.ctok(te2)
+            #    lyrf = G * (tdef3 + tdef2) / 2. * (hgt0c - h3)
+            #    if lyrf > 0: pcl.bfzl += lyrf
+        # Is this the -10C level
+        if te2 < -10.0:
+            pe3 = pelast
+            h3 = interp.hght(prof, pe3)
+            te3 = interp.vtmp(prof, pe3)
+            tp3 = thermo.wetlift3(pe1, tp1, pe3)
+            lyrf = lyre
+            # if lyrf > 0.: pcl.wm10c = totp - lyrf
+            # else: pcl.wm10c = totp
+            # if not utils.QC(pm10c) or pm10c > pcl.lclpres:
+            #    pcl.wm10c = 0
+            # elif utils.QC(pe2):
+            #    te2 = interp.vtmp(prof, pe2)
+            #    tp2 = thermo.wetlift(pe3, tp3, pe2)
+            #    tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / \
+            #        thermo.ctok(te3)
+            #    tdef2 = (thermo.virtemp(pe2, tp2, tp2) - te2) / \
+            #        thermo.ctok(te2)
+            #    lyrf = G * (tdef3 + tdef2) / 2. * (hgtm10c - h3)
+            #    if lyrf > 0: pcl.wm10c += lyrf
+
+        # Is this the -20C level
+        if te2 < -20.0:
+            pe3 = pelast
+            h3 = interp.hght(prof, pe3)
+            te3 = interp.vtmp(prof, pe3)
+            tp3 = thermo.wetlift3(pe1, tp1, pe3)
+            lyrf = lyre
+            # if lyrf > 0.: pcl.wm20c = totp - lyrf
+            # else: pcl.wm20c = totp
+            # if not utils.QC(pm20c) or pm20c > pcl.lclpres:
+            #    pcl.wm20c = 0
+            # elif utils.QC(pe2):
+            #    te2 = interp.vtmp(prof, pe2)
+            #    tp2 = thermo.wetlift(pe3, tp3, pe2)
+            #    tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / \
+            #        thermo.ctok(te3)
+            #    tdef2 = (thermo.virtemp(pe2, tp2, tp2) - te2) / \
+            #        thermo.ctok(te2)
+            #    lyrf = G * (tdef3 + tdef2) / 2. * (hgtm20c - h3)
+            #    if lyrf > 0: pcl.wm20c += lyrf
+
+        # Is this the -30C level
+        if te2 < -30.0:
+            pe3 = pelast
+            h3 = interp.hght(prof, pe3)
+            te3 = interp.vtmp(prof, pe3)
+            tp3 = thermo.wetlift3(pe1, tp1, pe3)
+            lyrf = lyre
+            # if lyrf > 0.: pcl.wm30c = totp - lyrf
+            # else: pcl.wm30c = totp
+            # if not utils.QC(pm30c) or pm30c > pcl.lclpres:
+            #    pcl.wm30c = 0
+            # elif utils.QC(pe2):
+            #    te2 = interp.vtmp(prof, pe2)
+            #    tp2 = thermo.wetlift(pe3, tp3, pe2)
+            #    tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / \
+            #        thermo.ctok(te3)
+            #    tdef2 = (thermo.virtemp(pe2, tp2, tp2) - te2) / \
+            #        thermo.ctok(te2)
+            #    lyrf = G * (tdef3 + tdef2) / 2. * (hgtm30c - h3)
+            #    if lyrf > 0: pcl.wm30c += lyrf
+
+        # Is this the 3km level
+        if pcl['lclhght'] < 3000.0:
+            if interp.to_agl(prof, h1) <= 3000.0 and interp.to_agl(prof, h2) >= 3000.0:
+                pe3 = pelast
+                h3 = interp.hght(prof, pe3)
+                te3 = interp.vtmp(prof, pe3)
+                tp3 = thermo.wetlift3(pe1, tp1, pe3)
+                lyrf = lyre
+                if lyrf > 0:
+                    pcl['b3km'] = totp - lyrf
+                else: pcl['b3km'] = totp
+                h4 = interp.to_msl(prof, 3000.)
+                pe4 = interp.pres(prof, h4)
+                # if utils.QC(pe2):
+                te2 = interp.vtmp(prof, pe4)
+                tp2 = thermo.wetlift3(pe3, tp3, pe4)
+                tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / \
+                         thermo.ctok(te3)
+                tdef2 = (thermo.virtemp(pe4, tp2, tp2) - te2) / \
+                         thermo.ctok(te2)
+                lyrf = G * (tdef3 + tdef2) / 2. * (h4 - h3)
+                if lyrf > 0: pcl['b3km'] += lyrf
+        else: pcl['b3km'] = 0.
+        # Is this the 6km level
+        if pcl['lclhght'] < 6000.0:
+            if interp.to_agl(prof, h1) <= 6000.0 and interp.to_agl(prof, h2) >= 6000.0:
+                pe3 = pelast
+                h3 = interp.hght(prof, pe3)
+                te3 = interp.vtmp(prof, pe3)
+                tp3 = thermo.wetlift3(pe1, tp1, pe3)
+                lyrf = lyre
+                # if lyrf > 0: pcl.b6km = totp - lyrf
+                # else: pcl.b6km = totp
+                # h4 = interp.to_msl(prof, 6000.)
+                # pe4 = interp.pres(prof, h4)
+                # if utils.QC(pe2):
+                #    te2 = interp.vtmp(prof, pe4)
+                #    tp2 = thermo.wetlift(pe3, tp3, pe4)
+                #    tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / \
+                #        thermo.ctok(te3)
+                #    tdef2 = (thermo.virtemp(pe4, tp2, tp2) - te2) / \
+                #        thermo.ctok(te2)
+                #    lyrf = G * (tdef3 + tdef2) / 2. * (h4 - h3)
+                #    if lyrf > 0: pcl.b6km += lyrf
+        # else: pcl.b6km = 0.
+
+        h1 = h2
+
+        # LFC Possibility
+        if lyre >= 0.0 and lyrlast <= 0.0:
+            tp3 = tp1
+            # te3 = te1
+            pe2 = pe1
+            pe3 = pelast
+            if interp.vtmp(prof, pe3) < thermo.virtemp(
+                pe3, thermo.wetlift3(pe2, tp3, pe3), thermo.wetlift3(pe2, tp3, pe3)
+            ):
+                # Found an LFC, store height/pres and reset EL/MPL
+                pcl['lfcpres'] = pe3
+                pcl['lfchght'] = interp.to_agl(prof, interp.hght(prof, pe3))
+                pcl['elpres'] = -999.0
+                pcl['elhght'] = -999.0
+                pcl['mplpres'] = -999.0
+
+            else:
+
+                ###############################################################
+                # This minimization block (while loop) was causing
+                # ZeroDivisionErrors
+                ###############################################################
+                # while interp.vtmp(prof, pe3) > thermo.virtemp(pe3, thermo.wetlift3(pe2, tp3, pe3),
+                #                                              thermo.wetlift3(pe2, tp3, pe3)) and pe3 > 0:
+                while (
+                    interp.vtmp(prof, pe3)
+                    > thermo.virtemp(
+                        pe3,
+                        thermo.wetlift3(pe2, tp3, pe3),
+                        thermo.wetlift3(pe2, tp3, pe3),
+                    )
+                    and pe3 > 5
+                ):
+                    pe3 -= 5
+                if pe3 > 0:
+                    # Found a LFC, store height/pres and reset EL/MPL
+                    pcl['lfcpres'] = pe3
+                    pcl['lfchght'] = interp.to_agl(prof, interp.hght(prof, pe3))
+                    cinh_old = totn
+                    tote = 0.0
+                    li_max = -9999.0
+                    # if cap_strength < 0.: cap_strength = 0.
+                    # pcl.cap = cap_strength
+                    # pcl.cappres = cap_strengthpres
+
+                    pcl['elpres'] = -999.0
+                    pcl['elhght'] = -999.0
+                    pcl['mplpres'] = -999.0
+
+            # Hack to force LFC to be at least at the LCL
+            if pcl['lfcpres'] >= pcl['lclpres']:
+                pcl['lfcpres'] = pcl['lclpres']
+                pcl['lfchght'] = pcl['lclhght']
+
+        # EL Possibility
+        if lyre <= 0.0 and lyrlast >= 0.0:
+            tp3 = tp1
+            # te3 = te1
+            pe2 = pe1
+            pe3 = pelast
+            while interp.vtmp(prof, pe3) < thermo.virtemp(
+                pe3, thermo.wetlift3(pe2, tp3, pe3), thermo.wetlift3(pe2, tp3, pe3)
+            ):
+                pe3 -= 5
+            pcl['elpres']= pe3
+            pcl['elhght'] = interp.to_agl(prof, interp.hght(prof, pcl['elpres']))
+            # pcl.mplpres = ma.masked
+            # pcl.limax = -li_max
+            # pcl.limaxpres = li_maxpres
+        """
+        # MPL Possibility
+        if tote < 0.:
+            pe3 = pelast
+            h3 = interp.hght(prof, pe3)
+            te3 = interp.vtmp(prof, pe3)
+            tp3 = thermo.wetlift3(pe1, tp1, pe3)
+            totx = tote - lyre
+            pe2 = pelast
+            while totx > 0:
+                pe2 -= 1
+                te2 = interp.vtmp(prof, pe2)
+                tp2 = thermo.wetlift3(pe3, tp3, pe2)
+                h2 = interp.hght(prof, pe2)
+                tdef3 = (thermo.virtemp(pe3, tp3, tp3) - te3) / \
+                    thermo.ctok(te3)
+                tdef2 = (thermo.virtemp(pe2, tp2, tp2) - te2) / \
+                    thermo.ctok(te2)
+                lyrf = G * (tdef3 + tdef2) / 2. * (h2 - h3)
+                totx += lyrf
+                tp3 = tp2
+                te3 = te2
+                pe3 = pe2
+            pcl.mplpres = pe2
+            pcl.mplhght = interp.to_agl(prof, interp.hght(prof, pe2))
+
+        # 500 hPa Lifted Index
+        if prof.pres[i] <= 500. and not utils.QC(pcl.li5):
+            a = interp.vtmp(prof, 500.)
+            b = thermo.wetlift(pe1, tp1, 500.)
+            pcl.li5 = a - thermo.virtemp(500, b, b)
+
+        # 300 hPa Lifted Index
+        if prof.pres[i] <= 300. and not utils.QC(pcl.li3):
+            a = interp.vtmp(prof, 300.)
+            b = thermo.wetlift(pe1, tp1, 300.)
+            pcl.li3 = a - thermo.virtemp(300, b, b)
+
+#    pcl.bminus = cinh_old
+    """
+    pcl['bplus'] = totp
+    """
+    # Calculate BRN if available
+    bulk_rich(prof, pcl)
+
+    # Save params
+    if np.floor(pcl.bplus) == 0: pcl.bminus = 0.
+    pcl.ptrace = ma.concatenate((ptrace, ptraces))
+    pcl.ttrace = ma.concatenate((ttrace, ttraces))
+
+    # Find minimum buoyancy from Trier et al. 2014, Part 1
+    idx = np.ma.where(pcl.ptrace >= 500.)[0]
+    if len(idx) != 0:
+        b = pcl.ttrace[idx] - interp.vtmp(prof, pcl.ptrace[idx])
+        idx2 = np.ma.argmin(b)
+        pcl.bmin = b[idx2]
+        pcl.bminpres = pcl.ptrace[idx][idx2]
+    """
+    return pcl
+
+
+
 @njit
-def parcelx(prof, flag, *args):
+def parcelx_original(prof, flag, *args):
     """Lifts the specified parcel, calculates various levels and parameters from the
     profile object. B+/B- are calculated based on the specified layer. Such parameters
     include CAPE, CIN, LCL height, LFC height, buoyancy minimum. EL height, MPL height.
@@ -736,6 +1263,7 @@ def parcelx(prof, flag, *args):
         pcl.bminpres = pcl.ptrace[idx][idx2]
     """
     return pcl
+
 
 spec = [
     ("pres", float64),
@@ -1598,3 +2126,6 @@ def bunkers_storm_motion(prof):
         #rstu, rstv, lstu, lstv = winds.non_parcel_bunkers_motion(prof)
 
     return rstu, rstv, lstu, lstv
+
+if __name__ == '__main__':
+    cc.compile()
