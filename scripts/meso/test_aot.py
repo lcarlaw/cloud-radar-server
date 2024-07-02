@@ -20,61 +20,6 @@ from time import time
 
 float_array = types.float64[:,:] 
 
-def full_parallel(args):
-    """
-    Adds in calcs from worker.
-    """
-    d = {}
-    pres, tmpc, dwpc, wspd, wdir, hght, j, i = args
-    pres_value = pres[:,j,i]
-    tmpc_value = tmpc[:,j,i]
-    dwpc_value = dwpc[:,j,i]
-    wspd_value = wspd[:,j,i]
-    wdir_value = wdir[:,j,i]
-    hght_value = hght[:,j,i]
-    
-    mlpcl = aot_module.parcelx(pres_value, tmpc_value, dwpc_value, wspd_value, wdir_value, hght_value, 4)
-    mupcl = aot_module.parcelx(pres_value, tmpc_value, dwpc_value, wspd_value, wdir_value, hght_value, 3)
-    eff_inflow = aot_module.effective_inflow_layer(pres_value, tmpc_value, dwpc_value, wspd_value, wdir_value, hght_value)
-    d['eff_inflow_bot'] = eff_inflow[0]
-    d['eff_inflow_top'] = eff_inflow[1]
-    d['mlcape'] = mlpcl['bplus']
-    d['mlcin'] = -1 * mlpcl['bminus']
-    d['mucape'] = mupcl['bplus']
-    d['cape3km'] = mlpcl['b3km']
-    d['mllcl'] = mlpcl['lclhght']
-    d['elhght'] = mupcl['elhght']
-
-    prof = profile.create_profile(pres=pres[:,j,i], tmpc=tmpc[:,j,i],
-                                          hght=hght[:,j,i], dwpc=dwpc[:,j,i],
-                                          wspd=wspd[:,j,i], wdir=wdir[:,j,i])
-
-    eff_inflow = d['eff_inflow_bot'], d['eff_inflow_top']
-    d['esrh'] = derived.srh(prof, effective_inflow_layer=eff_inflow)
-    d['srh500'] = derived.srh(prof, lower=0, upper=500)
-    d['srh01km'] = derived.srh(prof, lower=0, upper=1000)
-    d['lr03km'] = derived.lapse_rate(prof, lower=0, upper=3000)
-    d['snsq'] = derived.snsq(prof)
-    
-    d['ebwd_u'], d['ebwd_v'] = derived.ebwd_aot(prof, d['elhght'], 
-                                                            d['eff_inflow_bot'])
-    d['shr1_u'], d['shr1_v'] = derived.bulk_shear(prof, height=1000)
-    d['shr3_u'], d['shr3_v'] = derived.bulk_shear(prof, height=3000)
-    d['shr6_u'], d['shr6_v'] = derived.bulk_shear(prof, height=6000)
-    d['shr8_u'], d['shr8_v'] = derived.bulk_shear(prof, height=8000)
-    d['rm5_u'], d['rm5_v'] = derived.rm5(prof)
-    d['lm5_u'], d['lm5_v'] = derived.lm5(prof)
-    devtor = derived.devtor(prof)
-    d['devtor_u'], d['devtor_v'], d['deviance'] = devtor
-
-    d['estp'] = derived.estp_aot(d['mlcape'], -1*d['mlcin'], 
-                                        d['esrh'], d['ebwd_u'], 
-                                        d['ebwd_v'], d['mllcl'],
-                                        d['eff_inflow_bot'], prof)
-    #d['nst'] = derived.nst(d['cape3km'], d['mlcin'], vort[j,i], prof)
-    return (j, i), d
-
-
 def process_element(args):
     """
     Perform calculations on variables return from ahead-of-time-compiled functions. 
@@ -102,26 +47,6 @@ def process_element(args):
     d['elhght'] = mupcl['elhght']
     return (j, i), d
 
-
-def test_aot_full_parallel(pres, tmpc, dwpc, wspd, wdir, hght, vort):
-    shape = pres.shape
-    
-    t1 = time() 
-    # About 10 seconds with 4 processes
-    with Pool(processes=4) as pool:
-        args = [(pres, tmpc, dwpc, wspd, wdir, hght, j, i) for j in range(shape[1]) for i in range(shape[2])]
-        results = pool.map(full_parallel, args)
-    print(f"Pool multiprocessing step: {time() - t1} seconds")
-    
-    t2 = time()
-    data_dict = {}
-    for i, variable in enumerate(results[0][1].keys()):
-        data = np.zeros((shape[1], shape[2]))
-        for key, result in results:
-            data[key] = result[variable]
-        data_dict[variable] = data
-    print(f"Gathering data into array: {time() - t2} seconds")
-    return data_dict 
 
 
 # Can't parallelize the aot function with numba...
@@ -211,6 +136,8 @@ def do_comparison():
     t1 = time()
     results = test_aot_version(pres, tmpc, dwpc, wspd, wdir, hght, vort)
     t2 = time() 
+    #with open(f"../../tests/numba-aot/aot.pickle", 'wb') as f:
+    #    pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     results = test_aot_version(pres, tmpc, dwpc, wspd, wdir, hght, vort)
     t3 = time()
@@ -230,6 +157,7 @@ def do_comparison():
                      List(SCALAR_PARAMS.keys()), List(VECTOR_PARAMS.keys()))
     t7 = time()
     
+    print("=====================================")
     print(f"AOT parallel loop 1: {t2-t1} seconds")
     print(f"AOT parallel loop 2: {t3-t2} seconds")
     print("=====================================")
@@ -238,9 +166,6 @@ def do_comparison():
     print("=====================================")
     print(f"Original method loop 1: {t6-t5} seconds")
     print(f"Original method loop 2: {t7-t6} seconds")
-
-    #with open(f"../../tests/numba-aot/aot.pickle", 'wb') as f:
-    #    pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == '__main__':
     freeze_support()
