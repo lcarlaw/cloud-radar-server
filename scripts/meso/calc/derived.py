@@ -166,6 +166,15 @@ def srh(prof, lower=None, upper=None, effective_inflow_layer=None):
     return srh
 
 @njit
+def estp_aot(mlcape, mlcin, esrh, ebwd_u, ebwd_v, lclhght, eff_inflow_base, prof):
+    eshr = utils.mag(ebwd_u, ebwd_v)
+    estp = params.stp_cin(mlcape, esrh, eshr*KTS2MS, lclhght, mlcin)
+
+    ebot = interp.to_agl(prof, interp.hght(prof, eff_inflow_base))
+    if ebot > 10 or ~np.isfinite(ebot): estp = 0.
+    return estp
+
+@njit
 def estp(mlcape, mlcin, esrh, ebwd_u, ebwd_v, mlpcl, eff_inflow_base, prof):
     eshr = utils.mag(ebwd_u, ebwd_v)
     estp = params.stp_cin(mlcape, esrh, eshr*KTS2MS, mlpcl.lclhght, mlcin)
@@ -252,6 +261,16 @@ def ebwd(prof, mupcl, eff_inflow):
     height_top = (mupcl.elhght + ebot_hght) / 2.
     ptop = interp.pres(prof, interp.to_msl(prof, height_top))
     u, v = winds.wind_shear(prof, pbot=eff_inflow[0], ptop=ptop)
+    if ~np.isfinite(u): u = 0.
+    if ~np.isfinite(v): v = 0.
+    return (u, v)
+
+@njit
+def ebwd_aot(prof, elhght, eff_inflow_bot):
+    ebot_hght = interp.to_agl(prof, interp.hght(prof, eff_inflow_bot))
+    height_top = (elhght + ebot_hght) / 2.
+    ptop = interp.pres(prof, interp.to_msl(prof, height_top))
+    u, v = winds.wind_shear(prof, pbot=eff_inflow_bot, ptop=ptop)
     if ~np.isfinite(u): u = 0.
     if ~np.isfinite(v): v = 0.
     return (u, v)

@@ -1,4 +1,4 @@
-from numba import njit, types
+from numba import njit, types, prange
 from numba.experimental import jitclass
 from numba import int32, float64
 from numba import vectorize
@@ -12,6 +12,7 @@ from sharptab import thermo
 from sharptab import utils
 from sharptab import winds
 from sharptab import profile
+from calc import derived
 
 from .constants import *
 
@@ -21,7 +22,7 @@ from .constants import *
 # Running this with python -m sharptab.params will produce a file called parcelx_module
 # within the sharptab folder which will be read in during NSE execution.
 from numba.pycc import CC
-cc = CC('parcelx_module')
+cc = CC('aot_module')
 #########################################################################################
 
 spec = [
@@ -748,7 +749,6 @@ def parcelx(pres, tmpc, dwpc, wspd, wdir, hght, flag):
         pcl.bminpres = pcl.ptrace[idx][idx2]
     """
     return pcl
-
 
 
 @njit
@@ -1490,6 +1490,74 @@ def mean_theta(prof, pbot=None, ptop=None, exact=False):
 # PARCEL LIFTING LEVEL CALCULATIONS
 #
 ###############################################################################
+@cc.export('effective_inflow_layer_aot', '(f8[:])(f8[:],f8[:],f8[:],f8[:],f8[:],f8[:])')
+def effective_inflow_layer_aot(pres, tmpc, dwpc, wspd, wdir, hght):
+    """NUMBA DOES NOT SUPPORT RECURSIVE CLASS CALLS!
+
+    Calculate the top and bottom of the effective inflow layer based on research by [3]_.
+
+    Parameters
+    ----------
+    prof : profile object
+        Profile object
+    ecape : number (optional; default=100)
+        Minimum amount of CAPE in the layer to be considered part of the
+        effective inflow layer.
+    echine : number (optional; default=250)
+        Maximum amount of CINH in the layer to be considered part of the
+        effective inflow layer
+    mupcl : parcel object
+        Most Unstable Layer parcel
+
+    Returns
+    -------
+    pbot : number
+        Pressure at the bottom of the layer (hPa)
+    ptop : number
+        Pressure at the top of the layer (hPa)
+    """
+    ecape = 100.0
+    ecinh = -250.0
+
+    prof = profile.create_profile(pres, tmpc, dwpc, wspd, wdir, hght)
+    mulplvals = DefineParcel_2(prof, 3)
+    mupcl = cape1(prof, mulplvals)
+
+    mucape = mupcl.bplus
+    mucinh = mupcl.bminus
+    pbot = -999
+    ptop = -999
+    if mucape != 0:
+        if mucape >= ecape and mucinh > ecinh:
+            # Begin at surface and search upward for effective surface
+            for i in range(prof.sfc, prof.top):
+                pcl = cape(prof, prof.pres[i], prof.tmpc[i], prof.dwpc[i])
+
+                if pcl.bplus >= ecape and pcl.bminus > ecinh:
+                    pbot = prof.pres[i]
+                    break
+            bptr = i
+            # Keep searching upward for the effective top
+            for i in range(bptr + 1, prof.top):
+                if not prof.dwpc[i] or not prof.tmpc[i]:
+                    continue
+                pcl = cape(prof, prof.pres[i], prof.tmpc[i], prof.dwpc[i])
+
+                if (
+                    pcl.bplus < ecape or pcl.bminus <= ecinh
+                ):  # Is this a potential "top"?
+                    j = 1
+                    if (prof.dwpc[i - j] < -999) and (prof.tmpc[i - j] < -999.0):
+                        j += 1
+                    ptop = prof.pres[i - j]
+                    if ptop > pbot:
+                        ptop = pbot
+                    break
+    ret = np.zeros((2))
+    ret[0] = pbot
+    ret[1] = ptop
+    return ret
+
 @njit
 def effective_inflow_layer(prof, *args):
     """NUMBA DOES NOT SUPPORT RECURSIVE CLASS CALLS!
@@ -2125,6 +2193,86 @@ def bunkers_storm_motion(prof):
         #rstu, rstv, lstu, lstv = winds.non_parcel_bunkers_motion(prof)
 
     return rstu, rstv, lstu, lstv
+
+
+float_array = types.float64[:,:] 
+@njit(parallel=True)
+@cc.export('worker', 'DictType(unicode_type,types.float64[:,:])(f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:],f8[:,:,:])')
+def worker(pres, tmpc, dwpc, wspd, wdir, hght, vort, incoming):
+    shape = pres.shape
+    d = Dict.empty(
+        key_type=types.unicode_type,
+        value_type=float_array,
+    )
+
+    ####################################################################################
+    # In order for this all to work within the ahead-of-time-compiled numba function,
+    # need to explicitly and individually declare arrays. Trying to figure out how to
+    # pass List(SCALAR_PARAMS.keys() and List(VECTOR_PARAMS.keys()) from config file.
+    # Scalars
+    d['eff_inflow_base'] = incoming[0]
+    d['eff_inflow_top'] = incoming[1]
+    d['mlcape'] = incoming[2]
+    d['mlcin'] = incoming[3]
+    d['mucape'] = incoming[4]
+    d['cape3km'] = incoming[5]
+    d['mllcl'] = incoming[6]
+    d['elhght'] = incoming[7]
+    d['esrh'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['srh500'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['srh01km'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['lr03km'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['estp'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['nst'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['deviance'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['snsq'] = np.zeros((shape[1], shape[2]), dtype='float64')
+
+    # Vectors
+    d['ebwd_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['ebwd_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr1_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr1_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr3_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr3_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr6_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr6_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr8_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['shr8_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['rm5_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['rm5_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['lm5_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['lm5_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['devtor_u'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    d['devtor_v'] = np.zeros((shape[1], shape[2]), dtype='float64')
+    
+    for j in prange(shape[0]):
+        for i in prange(shape[1]):
+            prof = profile.create_profile(pres=pres[:,j,i], tmpc=tmpc[:,j,i],
+                                          hght=hght[:,j,i], dwpc=dwpc[:,j,i],
+                                          wspd=wspd[:,j,i], wdir=wdir[:,j,i])
+            
+            eff_inflow = d['eff_inflow_base'][j,i], d['eff_inflow_top'][j,i]
+            d['esrh'][j,i] = derived.srh(prof, effective_inflow_layer=eff_inflow)
+            d['srh500'][j,i] = derived.srh(prof, lower=0, upper=500)
+            d['lr03km'][j,i] = derived.lapse_rate(prof, lower=0, upper=3000)
+            d['ebwd_u'][j,i], d['ebwd_v'][j,i] = derived.ebwd_aot(prof, d['elhght'][j,i], 
+                                                                  d['eff_inflow_base'][j,i])
+            d['shr1_u'][j,i], d['shr1_v'][j,i] = derived.bulk_shear(prof, height=1000)
+            d['shr3_u'][j,i], d['shr3_v'][j,i] = derived.bulk_shear(prof, height=3000)
+            d['shr6_u'][j,i], d['shr6_v'][j,i] = derived.bulk_shear(prof, height=6000)
+            d['shr8_u'][j,i], d['shr8_v'][j,i] = derived.bulk_shear(prof, height=8000)
+            d['rm5_u'][j,i], d['rm5_v'][j,i] = derived.rm5(prof)
+            d['lm5_u'][j,i], d['lm5_v'][j,i] = derived.lm5(prof)
+            devtor = derived.devtor(prof)
+            d['devtor_u'][j,i], d['devtor_v'][j,i], d['deviance'][j,i] = devtor
+
+            d['estp'][j,i] = derived.estp_aot(d['mlcape'][j,i], -1*d['mlcin'][j,i], 
+                                              d['esrh'][j,i], d['ebwd_u'][j,i], 
+                                              d['ebwd_v'][j,i], d['mllcl'][j,i],
+                                              d['eff_inflow_base'][j,i], prof)
+            d['nst'][j,i] = derived.nst(d['cape3km'][j,i], d['mlcin'][j,i], vort[j,i], prof)
+
+    return d
 
 if __name__ == '__main__':
     cc.compile()
