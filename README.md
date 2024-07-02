@@ -160,8 +160,15 @@ A working version of WGET is needed to download model data.
    git clone https://github.com/tjturnage/cloud-radar-server.git
    ```
 
-#### Edit Config Files
-Within the `scripts/meso` sub-directory, open `configs.py`.  The first six variables must be changed to specify the locations of the Python, WGRIB2, and WGET executables on your system, as well as where you'd like output and log files to be stored. `NUM_THREADS` controls how many threads are utilized during the computationally-expensive parcel lifting steps during the NSE placefile creation and should be set to a number less than the total number of threads available.  
+#### Pre-compile functions for NSE scripts
+The scripts to generate the NSE placefiles use a library called numba to transform operations associated with expensive parcel lifting calculations to fast machine code. While this can be done at runtime (JIT, or "just-in-time"), there is significant initial overhead. Much of the lifting and post-processing code can be pre-compiled AOT (ahead-of-time). To do this, first ensure that environment variable `CC` points to the same C-compiler used when creating the Python environment.  Then, within the `scripts/meso` directory, run:
+
+```
+python -m sharptab.compile
+```
+
+This will take a minute or two, but if successful, a file called aot_module.so will be generated in the sharptab directory which should contain three methods: `parcelx`, `effective_inflow_layer`, and `fast_loop`. 
+
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
