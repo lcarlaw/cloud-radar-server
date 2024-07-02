@@ -634,7 +634,7 @@ def effective_inflow_layer(pres, tmpc, dwpc, wspd, wdir, hght):
 
 
 float_array = types.float64[:,:] 
-@njit(parallel=True)
+@njit(nogil=True, parallel=True)
 @cc.export('fast_loop', 'DictType(unicode_type,types.float64[:,:])(f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:],f8[:,:,:])')
 def fast_loop(pres, tmpc, dwpc, wspd, wdir, hght, vort, incoming):
     shape = pres.shape

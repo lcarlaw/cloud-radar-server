@@ -164,7 +164,7 @@ A working version of WGET is needed to download model data.
 The scripts to generate the NSE placefiles use a library called numba to transform operations associated with expensive parcel lifting calculations to fast machine code. While this can be done at runtime (JIT, or "just-in-time"), there is significant initial overhead. Much of the lifting and post-processing code can be pre-compiled AOT (ahead-of-time). To do this, first ensure that environment variable `CC` points to the same C-compiler used when creating the Python environment.  Then, within the `scripts/meso` directory, run:
 
 ```
-python -m sharptab.compile
+python -m sharptab.compile_aot
 ```
 
 This will take a minute or two, but if successful, a file called aot_module.so will be generated in the sharptab directory which should contain three methods: `parcelx`, `effective_inflow_layer`, and `fast_loop`. 
