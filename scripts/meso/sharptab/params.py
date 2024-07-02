@@ -235,7 +235,6 @@ class DefineParcel(object):
         else: self.pbot = ma.masked
     """
 
-
 @cc.export('parcelx', 'DictType(unicode_type, f8)(f8[:],f8[:],f8[:],f8[:],f8[:],f8[:],i4)')
 def parcelx(pres, tmpc, dwpc, wspd, wdir, hght, flag):
     """
