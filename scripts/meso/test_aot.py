@@ -79,7 +79,7 @@ def test_jit_version(pres, tmpc, dwpc, wspd, wdir, hght):
 
 def do():
     #set_num_threads(8)
-    fname = '/Users/leecarlaw/scripts/tmp/data/standard.pickle'
+    fname = '../../tests/standard.pickle'
     with open(fname, 'rb') as f: data = pickle.load(f)
 
     pres = data['pres']
