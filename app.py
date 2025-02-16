@@ -783,13 +783,18 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     This version of the script-launcher trying to work in cancel button
     """
     UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-    # writes a black event_times.txt file to the assets directory
-    args = [str(sim_times['simulation_seconds_shift']), 'None', cfg['RADAR_DIR'],
-            cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
+    # 2/16/25 - Removed as this initial call to write_event_times.py was failing in 
+    # append_radar_file_info(). File radarinfo.json is not available at this point (created
+    # in the radar download steps below). Errors being thrown in log file about files being
+    # a NoneType object. Things seem to be okay without this, as write_event_times.py is 
+    # called after the LSR placefile generation.
+    # writes a blank event_times.txt file to the assets directory
+    #args = [str(sim_times['simulation_seconds_shift']), 'None', cfg['RADAR_DIR'],
+    #        cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
+    #res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
+    #                    cfg['SESSION_ID'])
+    #if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+    #    return
 
 
     # based on list of selected radars, create a dictionary of radar metadata
