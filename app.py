@@ -1003,11 +1003,13 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('confirm_radars_btn', 'disabled'),
          True, False),  # added radar confirm btn
         (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
         # wait to enable change time dropdown
         (Output('change_time', 'disabled'), True, False),
         (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('upload-data', 'disabled'), True, False), # prevent user uploads while running
     ])
 def launch_simulation(n_clicks, configs, sim_times, radar_info):
     """
@@ -1028,6 +1030,8 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info):
             #     print(f"Failed to send email: {e}")
             remove_files_and_dirs(configs)
             run_with_cancel_button(configs, sim_times, radar_info)
+    
+    logging.info(f"Processing scripts completed for session: {configs['SESSION_ID']}")
 
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
@@ -1193,6 +1197,7 @@ def run_transpose_script(PLACEFILES_DIR, sim_times, radar_info) -> None:
     Output('speed_dropdown', 'disabled'),
     Output('playback_specs', 'data', allow_duplicate=True),
     Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
+    Output('run_scripts_btn', 'disabled', allow_duplicate=True),
     [Input('playback_btn', 'n_clicks'),
      State('playback_speed_store', 'data'),
      State('configs', 'data'),
@@ -1237,12 +1242,14 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
                 UpdateDirList(
                     radar, sim_times['playback_clock_str'], cfg['POLLING_DIR'])
 
+    run_scripts_btn_disabled = False
     refresh_polling_btn_disabled = False
     if playback_running:
         refresh_polling_btn_disabled = True
+        run_scripts_btn_disabled = True
 
     return (btn_text, btn_disabled, False, playback_running, start, style, end, style, options,
-            False, playback_specs, refresh_polling_btn_disabled)
+            False, playback_specs, refresh_polling_btn_disabled, run_scripts_btn_disabled)
 
 
 @app.callback(
@@ -1254,6 +1261,7 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
     Output('current_readout', 'style'),
     Output('playback_specs', 'data', allow_duplicate=True),
     Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
+    Output('run_scripts_btn', 'disabled', allow_duplicate=True),
     [Input('pause_resume_playback_btn', 'n_clicks'),
      Input('playback_timer', 'n_intervals'),
      Input('change_time', 'value'),
@@ -1387,12 +1395,15 @@ def manage_clock_(nclicks, _n_intervals, new_time, _playback_running, playback_s
     specs['playback_btn_text'] = playback_btn_text
     specs['style'] = style
 
+    run_scripts_btn_disabled = True
     refresh_polling_btn_disabled = True
     if playback_paused:
         refresh_polling_btn_disabled = False
+        run_scripts_btn_disabled = False 
+
     return (specs['interval_disabled'], specs['status'], specs['style'],
             specs['playback_btn_text'], readout_time, style, specs,
-            refresh_polling_btn_disabled)
+            refresh_polling_btn_disabled, run_scripts_btn_disabled)
 
 ################################################################################################
 # ----------------------------- Playback Speed Callbacks  --------------------------------------
@@ -1489,10 +1500,11 @@ def update_day_dropdown(selected_year, selected_month):
         (Output('cancel_scripts', 'disabled'), False, True),
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), # Force user to relaunch sim
+        (Output('upload-data', 'disabled'), True, False), # prevent user uploads while running
     ]
 )
 def refresh_polling(n_clicks, cfg, sim_times, radar_info):
-    logging.info(f"Re-syncing polling times to current time")
+    logging.info(f"Re-syncing polling times to current time for session: {cfg['SESSION_ID']}")
     logging.info(f"Original sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
     
     # Re-compute the simulation times and update the dictionary
@@ -1606,6 +1618,7 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     logging.info("Entering function run_transpose_script")
     run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
 
+    logging.info(f"Polling refresh completed for session: {cfg['SESSION_ID']}")
     return sim_times, 'Launch Simulation', False, 'Pause Playback', True
 
 ################################################################################################
