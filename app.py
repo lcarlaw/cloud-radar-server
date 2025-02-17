@@ -783,13 +783,15 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     This version of the script-launcher trying to work in cancel button
     """
     UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-    # writes a black event_times.txt file to the assets directory
-    args = [str(sim_times['simulation_seconds_shift']), 'None', cfg['RADAR_DIR'],
-            cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
+    # Removed 2/17/2025. write_event_times.py failing in append_radar_file_info() since
+    # radarinfo.json isn't available yet.
+    # writes a blank event_times.txt file to the assets directory
+    #args = [str(sim_times['simulation_seconds_shift']), 'None', cfg['RADAR_DIR'],
+    #        cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
+    #res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
+    #                    cfg['SESSION_ID'])
+    #if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+    #    return
 
 
     # based on list of selected radars, create a dictionary of radar metadata
