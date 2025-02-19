@@ -1049,6 +1049,12 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info):
             playback_btn_disabled = False
             refresh_polling_btn_disabled = False
 
+    logging.info(f"Below, status None indicates user canceled scripts or unclean exit\n"
+                 f"--> Run scripts completed with status: {status}\n"
+                 f"--> Playback button disabled? {playback_btn_disabled}\n"
+                 f"--> Refresh polling button disabled? {refresh_polling_btn_disabled}\n"
+                 "=============================================================================")
+
     return playback_btn_disabled, refresh_polling_btn_disabled
     
    
@@ -1522,6 +1528,7 @@ def update_day_dropdown(selected_year, selected_month):
     ]
 )
 def refresh_polling(n_clicks, cfg, sim_times, radar_info):
+    # Set "defaults" if we don't return cleanly (i.e. user cancels scripts)
     status = None
     playback_btn_text = 'Launch Simulation'
     playback_btn_disabled = True 
@@ -1541,6 +1548,10 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     if status == 0:
         playback_btn_disabled = False
     
+    logging.info(f"Below, status None indicates user canceled scripts or unclean exit\n"
+                 f"--> Polling refresh scripts completed with status: {status}\n"
+                 f"--> Playback button disabled set to {playback_btn_disabled}\n"
+                 "=============================================================================")
     return (sim_times, playback_btn_text, playback_btn_disabled, 
             pause_resume_playback_btn_text, pause_resume_playback_btn_disabled)
 
@@ -1561,7 +1572,7 @@ def refresh_polling_funcs(cfg, sim_times, radar_info):
 
     # --------- Munger ---------------------------------------------------------
     # This for loop removes the now-stale munged radar files. We do this in a 
-    # first loop  to delete all of the files at once. Otherwise, the monitor bar 
+    # first loop to delete all of the files at once. Otherwise, the monitor bar 
     # will bounce back-and-forth if the case has more than one radar.
     if len(radar_info['radar_list']) > 0:
         for _r, radar in enumerate(radar_info['radar_list']):
