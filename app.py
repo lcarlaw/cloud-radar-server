@@ -976,8 +976,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
             return
 
         try:
-            UpdateHodoHTML(
-                'None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
+            UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
         except (IOError, ValueError, KeyError) as e:
             print("Error updating hodo html: ", e)
             logging.exception("Error updating hodo html: %s",e, exc_info=True)
@@ -1507,6 +1506,14 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
         os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
     except FileNotFoundError:
         pass
+
+    # Delete the uncompressed/munged radar files from the data directory. Needed if a user
+    # canceled a previous refresh before mungering finishes, leaving orphaned .uncompressed
+    # files in the radar data directory.
+    try:
+        remove_munged_radar_files(cfg)
+    except KeyError as e:
+        logging.exception("Error removing munged radar files ", exc_info=True)
 
     # --------- Munger ---------------------------------------------------------
     # This for loop removes the now-stale munged radar files. We do this in a 
