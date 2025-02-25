@@ -1523,10 +1523,16 @@ def update_day_dropdown(selected_year, selected_month):
         (Output('change_time', 'disabled'), True, False),
         (Output('cancel_scripts', 'disabled'), False, True),
         (Output('refresh_polling_btn', 'disabled'), True, False),
-        (Output('pause_resume_playback_btn', 'disabled'), True, True), # Force user to relaunch sim
+        #(Output('pause_resume_playback_btn', 'disabled'), True, True), # Force user to relaunch sim
     ]
 )
 def refresh_polling(n_clicks, cfg, sim_times, radar_info):
+    status = None
+    playback_btn_text = 'Launch Simulation'
+    playback_btn_disabled = True 
+    pause_resume_playback_btn_text = 'Pause Playback'
+    pause_resume_playback_btn_disabled = True
+
     logging.info(f"Re-syncing polling times to current time")
     logging.info(f"Original sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
     
@@ -1535,6 +1541,14 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     sim_times = make_simulation_times(dt, sim_times['event_duration'])
     logging.info(f"Updated sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
 
+    status = refresh_polling_funcs(cfg, sim_times, radar_info)
+    if status == 0:
+        playback_btn_disabled = False
+    
+    return (sim_times, playback_btn_text, playback_btn_disabled, 
+            pause_resume_playback_btn_text, pause_resume_playback_btn_disabled)
+
+def refresh_polling_funcs(cfg, sim_times, radar_info):
     # Remove the original file_times.txt file. This will get re-created by munger.py
     try:
         os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
@@ -1641,7 +1655,7 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     logging.info("Entering function run_transpose_script")
     run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
 
-    return sim_times, 'Launch Simulation', False, 'Pause Playback', True
+    return 0
 
 ################################################################################################
 # ----------------------------- Upload callback  -----------------------------------------------
@@ -1815,5 +1829,4 @@ if __name__ == '__main__':
             app.run(host="0.0.0.0", port=8051, threaded=True, debug=False, use_reloader=False,
                     dev_tools_hot_reload=False)
         else:
-            app.run(debug=True, port=8050, threaded=True,
-                    dev_tools_hot_reload=False)
+            app.run(debug=True, port=8050, threaded=True, dev_tools_hot_reload=False)
