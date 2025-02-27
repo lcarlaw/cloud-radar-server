@@ -1531,7 +1531,7 @@ def update_day_dropdown(selected_year, selected_month):
         (Output('change_time', 'disabled'), True, False),
         (Output('cancel_scripts', 'disabled'), False, True),
         (Output('refresh_polling_btn', 'disabled'), True, False),
-        #(Output('pause_resume_playback_btn', 'disabled'), True, True), # Force user to relaunch sim
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), # Force user to relaunch sim
     ]
 )
 def refresh_polling(n_clicks, cfg, sim_times, radar_info):
