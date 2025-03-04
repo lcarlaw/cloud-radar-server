@@ -185,6 +185,7 @@ class UpdateHodoHTML():
                 {"".join(f'<option value="{code}">{code}</option>' for code in station_codes)}
             </select>
             </div>
+            <div class="slider-text-container" id="valid-time">Hodograph Valid: </div>
             <div id="image-container" class="mb-4">
             <img id="hodograph-image" src="hodographs/{self.image_files[0]}" alt="Hodograph">
             <div id="station-container"></div>
@@ -256,13 +257,26 @@ class UpdateHodoHTML():
                 var selectedImage = images[this.value];
                 document.getElementById('hodograph-image').src = selectedImage;
                 updateStationCode(selectedImage);
+                updateValidTime()
             }};
 
             dropdown.onchange = function() {{
                 updateSlider();
+                updateValidTime()
+            }};
+
+            function updateValidTime() {{
+                var imgElement = document.getElementById("hodograph-image");
+                var imgSrc = imgElement.src;
+                var displayDiv = document.getElementById("valid-time");
+                var date = imgSrc.slice(-19, -4);
+                var displayDate = date.substring(0, 4) + '-' + date.substring(4, 6) + '-' +  date.substring(6, 8);
+                var displayDate = displayDate + ' ' + date.substring(9, 11) + ':' + date.substring(11, 13);
+                displayDiv.textContent = "Hodograph Valid: " + displayDate;
             }};
 
             updateSlider(); // Initialize the slider with the default selection
+            updateValidTime(); // Initialize the time string readout at top of page
 
             // Refresh the page every 2 minutes (120,000 milliseconds)
             {interval_code}

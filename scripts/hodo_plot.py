@@ -825,7 +825,8 @@ def create_hodos(filename):
     #rts = datetime.strftime(radar_time, "%Y-%m-%d %H:%M:%S")
     rts = datetime.strftime(shifted_time, "%Y-%m-%d %H:%M:%S")
     hodo_title = f'Hodograph from {radar_label} Valid {rts} UTC'
-    plt.title(hodo_title, fontsize = 16, weight = 'bold')
+    #plt.title(hodo_title, fontsize = 16, weight = 'bold')
+    plt.title(f'Hodograph from {radar_label}', fontsize = 16, weight = 'bold')
     try:
         #Plot SRW wrt Hgt
         sr_plot = plt.axes((0.895, 0.10, 0.095, 0.32))
@@ -1067,7 +1068,8 @@ def create_hodos(filename):
             shadow=True, fontsize=11, facecolor='white', framealpha=1.0, labelcolor='k', borderpad=0.7)
     #rts = datetime.strftime(radar_time, "%Y-%m-%d %H:%M:%S")
     rts = datetime.strftime(shifted_time, "%Y-%m-%d %H:%M:%S")
-    plt.title(f'SR Hodograph from {radar_label} Valid: {rts}', fontsize = 16, weight = 'bold')
+    #plt.title(f'SR Hodograph from {radar_label} Valid: {rts}', fontsize = 16, weight = 'bold')
+    plt.title(f'SR Hodograph from {radar_label}', fontsize = 16, weight = 'bold')
 
     try:
         #Plot SRW wrt Hgt

@@ -1550,13 +1550,15 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
 
     logging.info(f"Re-syncing polling times to current time")
     logging.info(f"Original sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
+    original_simulation_seconds_shift = sim_times['simulation_seconds_shift']
     
     # Re-compute the simulation times and update the dictionary
     dt = datetime.strptime(sim_times['event_start_str'], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
     sim_times = make_simulation_times(dt, sim_times['event_duration'])
+    delta_simulation_seconds_shift = sim_times['simulation_seconds_shift'] - original_simulation_seconds_shift
     logging.info(f"Updated sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
 
-    status = refresh_polling_funcs(cfg, sim_times, radar_info)
+    status = refresh_polling_funcs(cfg, sim_times, delta_simulation_seconds_shift, radar_info)
     if status == 0:
         playback_btn_disabled = False
     
@@ -1567,7 +1569,7 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     return (sim_times, playback_btn_text, playback_btn_disabled, 
             pause_resume_playback_btn_text, pause_resume_playback_btn_disabled)
 
-def refresh_polling_funcs(cfg, sim_times, radar_info):
+def refresh_polling_funcs(cfg, sim_times, delta_simulation_seconds_shift, radar_info):
     # Remove the original file_times.txt file. This will get re-created by munger.py
     try:
         os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
@@ -1630,38 +1632,24 @@ def refresh_polling_funcs(cfg, sim_times, radar_info):
         logging.exception("Error removing munged radar files ", exc_info=True)
             
     # --------- Hodographs ---------------------------------------------------------
-    # Remove original images
     hodo_images = glob(f"{cfg['HODOGRAPHS_DIR']}/*.png")
-    for image in hodo_images:
+    for fname in hodo_images:
+        file_time = datetime.strptime(fname[-19:-4], '%Y%m%d_%H%M%S')
+        file_time = file_time.replace(tzinfo=pytz.UTC).timestamp()
+        new_time = file_time + delta_simulation_seconds_shift
+        new_dt = datetime.fromtimestamp(new_time, tz=pytz.UTC)
+        new_fname = f"{fname[0:-19]}{new_dt.strftime('%Y%m%d_%H%M%S')}.png"
         try:
-            os.remove(image)
-        except:
-            logging.exception(f"Error removing: {image}")
+            os.rename(fname, new_fname)
+        except FileNotFoundError:
+            logging.exception(f"Error renaming {fname} to {new_fname}", exc_info=True)
 
-    create_radar_dict(radar_info)
-    for radar, data in radar_info['radar_dict'].items():
-        try:
-            asos_one = data['asos_one']
-            asos_two = data['asos_two']
-        except KeyError as e:
-            logging.exception("Error getting radar metadata: ", exc_info=True)
-
-        # Execute hodograph script
-        args = [radar, radar_info['new_radar'], asos_one, asos_two,
-                str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
-                cfg['HODOGRAPHS_DIR']]
-        res = call_function(utils.exec_script, Path(cfg['HODO_SCRIPT_PATH']), args,
-                            cfg['SESSION_ID'])
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            return
-
-        try:
-            UpdateHodoHTML(
-                'None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-        except (IOError, ValueError, KeyError) as e:
-            print("Error updating hodo html: ", e)
-            logging.exception("Error updating hodo html: %s",e, exc_info=True)
-            
+    try:
+        UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
+    except (IOError, ValueError, KeyError) as e:
+        print("Error updating hodo html: ", e)
+        logging.exception("Error updating hodo html: %s",e, exc_info=True)
+    
     # --------- Update event times file --------------------------------------------------
     args = [str(sim_times['simulation_seconds_shift']), cfg['DATA_DIR'], cfg['RADAR_DIR'],
             cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
