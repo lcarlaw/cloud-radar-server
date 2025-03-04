@@ -250,6 +250,12 @@ def remove_files_and_dirs(cfg) -> None:
                     os.remove(os.path.join(root, name))
             for name in dirs:
                 os.rmdir(os.path.join(root, name))
+    
+    # Remove the original file_times.txt file. This will get re-created by munger.py
+    try:
+        os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
+    except FileNotFoundError:
+        pass
 
 
 def remove_munged_radar_files(cfg) -> None:
@@ -1171,7 +1177,7 @@ def monitor(_n, cfg, cancel_btn_disabled, monitor_store):
         hodograph_completion = 0
         if len(radar_files) > 0:
             hodograph_completion = 100 * \
-                (num_hodograph_images / (2*len(radar_files)))
+                (num_hodograph_images / (2*len(radar_files[::2])))
 
         # NSE placefiles
         model_list, model_warning = utils.nse_status_checker(cfg['MODEL_DIR'])
