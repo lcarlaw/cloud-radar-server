@@ -1659,6 +1659,7 @@ def refresh_polling_funcs(cfg, sim_times, delta_simulation_seconds_shift, radar_
         return
     
     # --------- Synchronize placefile times with the new sim times ------------------------
+    create_radar_dict(radar_info) # Necessary for placefile shifting. Don't remove.
     logging.info("Entering function run_transpose_script")
     run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
 
