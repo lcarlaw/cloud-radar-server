@@ -998,6 +998,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     #Output('show_script_progress', 'children', allow_duplicate=True),
     Output('playback_btn', 'disabled', allow_duplicate=True),
     Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
+    Output('sim_times', 'data', allow_duplicate=True),
     [Input('run_scripts_btn', 'n_clicks'),
      State('configs', 'data'),
      State('sim_times', 'data'),
@@ -1032,6 +1033,11 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info):
     status = None
     playback_btn_disabled = True
     refresh_polling_btn_disabled = True
+
+    # Update the simulation times. 
+    event_dt = datetime.strptime(sim_times['event_start_str'], '%Y-%m-%d %H:%M')
+    event_dt = pytz.utc.localize(event_dt)
+    sim_times = make_simulation_times(event_dt, sim_times['event_duration'])
 
     if n_clicks == 0:
         raise PreventUpdate
@@ -1069,7 +1075,7 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info):
                  f"--> Refresh polling button disabled? {refresh_polling_btn_disabled}\n"
                  "=============================================================================")
     
-    return playback_btn_disabled, refresh_polling_btn_disabled
+    return playback_btn_disabled, refresh_polling_btn_disabled, sim_times
 
 
 ################################################################################################
