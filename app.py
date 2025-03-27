@@ -985,11 +985,17 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
 
 @app.callback(
     #Output('show_script_progress', 'children', allow_duplicate=True),
-    Output('sim_times', 'data', allow_duplicate=True),
+    Output('sim_times', 'data'),
     [Input('run_scripts_btn', 'n_clicks'),
      State('configs', 'data'),
      State('sim_times', 'data'),
-     State('radar_info', 'data')],
+     State('radar_info', 'data'),
+     State('start_year', 'value'),
+     State('start_month', 'value'),
+     State('start_day', 'value'),
+     State('start_hour', 'value'),
+     State('start_minute', 'value'),
+     State('duration', 'value')],
     prevent_initial_call=True,
     running=[
         (Output('start_year', 'disabled'), True, False),
@@ -1012,15 +1018,14 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('change_time', 'disabled'), True, False),
         (Output('cancel_scripts', 'disabled'), False, True),
     ])
-def launch_simulation(n_clicks, configs, sim_times, radar_info):
+def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, mn, dur):
     """
     This function is called when the "Run Scripts" button is clicked. It will execute the
     necessary scripts to simulate radar operations, create hodographs, and transpose placefiles.
     """
     # Update the simulation times. 
-    event_dt = datetime.strptime(sim_times['event_start_str'], '%Y-%m-%d %H:%M')
-    event_dt = pytz.utc.localize(event_dt)
-    sim_times = make_simulation_times(event_dt, sim_times['event_duration'])
+    dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
+    sim_times = make_simulation_times(dt, dur)
 
     if n_clicks == 0:
         raise PreventUpdate
@@ -1437,7 +1442,7 @@ def update_playback_speed(selected_speed) -> float:
 ################################################################################################
 @app.callback(
     Output('show_time_data', 'children'),
-    Output('sim_times', 'data'),
+    #Output('sim_times', 'data'),
     [Input('start_year', 'value'),
      Input('start_month', 'value'),
      Input('start_day', 'value'),
@@ -1453,8 +1458,9 @@ def get_sim(yr, mo, dy, hr, mn, dur) -> str:
     """
     dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
     line = f'{dt.strftime("%Y-%m-%d %H:%M")}Z ____ {dur} minutes'
-    sim_times = make_simulation_times(dt, dur)
-    return line, sim_times
+    #sim_times = make_simulation_times(dt, dur)
+    #return line, sim_times
+    return line
 
 
 @app.callback(
