@@ -1259,6 +1259,19 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         refresh_polling_btn_disabled = True
         run_scripts_btn_disabled = True
 
+    log_string = (
+        f"\n"
+        f"*************************Playback Launched**************************\n"
+        f"Session ID: {cfg['SESSION_ID']}\n"
+        f"Start: {sim_times['playback_start_str']}, End: {sim_times['playback_end_str']}\n"
+        f"Start dt: {sim_times['playback_start']}, End dt: {sim_times['playback_end']}\n"
+        f"Launch Simulation Button Disabled?: {btn_disabled}\n"
+        f"Pause Playback Button Disabled?: {False}\n"
+        f"Refresh Polling Button Disabled?: {refresh_polling_btn_disabled}\n"
+        f"********************************************************************\n"
+    )
+    logging.info(log_string)
+
     return (btn_text, btn_disabled, False, playback_running, start, style, end, style, options,
             False, playback_specs, refresh_polling_btn_disabled, run_scripts_btn_disabled)
 
