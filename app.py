@@ -985,7 +985,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
 
 @app.callback(
     #Output('show_script_progress', 'children', allow_duplicate=True),
-    Output('sim_times', 'data'),
+    Output('sim_times', 'data', allow_duplicate=True),
     [Input('run_scripts_btn', 'n_clicks'),
      State('configs', 'data'),
      State('sim_times', 'data'),
