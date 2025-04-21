@@ -165,9 +165,9 @@ class Mesowest(MesowestBase):
                 |  text_info  | str   | threshold, color, and position
         -------------------------------------------------------------------------------
         """
-        numfloat = float(num)
         new_str = 'NA'
         if num != 'NA':
+            numfloat = float(num)
             if short in ('t', 'dp', 'td', 'rt', 'rh'):
                 new_value = int(round(numfloat))
                 new_str = '" ' + str(new_value) + ' "'
@@ -183,7 +183,7 @@ class Mesowest(MesowestBase):
             elif short == 'wdir':
                 new_value = int(num)
                 new_str = str(new_value)
-            return new_str
+        return new_str
         
     def build_placefile(self):
         """
@@ -215,94 +215,91 @@ class Mesowest(MesowestBase):
             self.all_placefile += time_text
 
             for j,station in enumerate(jas['STATION']):
-                try:
-                    t_str, td_str, wdir_str, wspd_str = 'NA', 'NA', 'NA', 'NA'
-                    wgst_str, vsby_str, rt_str = 'NA', 'NA', 'NA'
-                    lon = station['LONGITUDE']
-                    lat = station['LATITUDE']
-                    object_line = f'Object: {lat},{lon}\n'
-                    status = station['STATUS']
-                    network = int(station['MNET_ID'])
-                    if int(network) == 162:
-                        net_dict = self.station_dict['rwis']
-                    else:
-                        net_dict = self.station_dict['public']
+                t_str, td_str, wdir_str, wspd_str = 'NA', 'NA', 'NA', 'NA'
+                wgst_str, vsby_str, rt_str = 'NA', 'NA', 'NA'
+                lon = station['LONGITUDE']
+                lat = station['LATITUDE']
+                object_line = f'Object: {lat},{lon}\n'
+                status = station['STATUS']
+                network = int(station['MNET_ID'])
+                if int(network) == 162:
+                    net_dict = self.station_dict['rwis']
+                else:
+                    net_dict = self.station_dict['public']
 
-                    wind_zoom = net_dict['wind']['threshold']
-                    other_zoom = net_dict['t']['threshold']   
+                wind_zoom = net_dict['wind']['threshold']
+                other_zoom = net_dict['t']['threshold']   
 
-                    dataset = jas['STATION'][j]['OBSERVATIONS']
-                    if status == 'ACTIVE':
-                        for _n,element in enumerate(list(short_dict.keys())):
-                            
-                            short_name = str(short_dict[element])
+                dataset = jas['STATION'][j]['OBSERVATIONS']
+                if status == 'ACTIVE':
+                    for _n,element in enumerate(list(short_dict.keys())):
+                        short_name = str(short_dict[element])
+                        try:
                             data = dataset[element]['value']
-                            if short_name == 't':
-                                t_str = self.convert_met_values(data,short_name)
-                            elif short_name == 'dp':
-                                td_str = self.convert_met_values(data,short_name)
-                            elif short_name == 'rt':
-                                rt_str = self.convert_met_values(data,short_name)
-                            elif short_name == 'vsby':
-                                vsby_str = self.convert_met_values(data,short_name)
-                            elif short_name == 'wspd':
-                                wspd_str = self.convert_met_values(data,short_name)
-                            elif short_name == 'wdir':
-                                wdir_str = self.convert_met_values(data,short_name)
-                            elif short_name == 'wgst':
-                                wgst_str = data
-                            else:
-                                continue
+                        except KeyError:
+                            data = 'NA'
+                        if short_name == 't':
+                            t_str = self.convert_met_values(data,short_name)
+                        elif short_name == 'dp':
+                            td_str = self.convert_met_values(data,short_name)
+                        elif short_name == 'rt':
+                            rt_str = self.convert_met_values(data,short_name)
+                        elif short_name == 'vsby':
+                            vsby_str = self.convert_met_values(data,short_name)
+                        elif short_name == 'wspd':
+                            wspd_str = self.convert_met_values(data,short_name)
+                        elif short_name == 'wdir':
+                            wdir_str = self.convert_met_values(data,short_name)
+                        elif short_name == 'wgst':
+                            wgst_str = data
+                        else:
+                            continue
 
-                        if wdir_str != 'NA' and wspd_str != 'NA':
-                            color_line = f'Color: {net_dict['wind']['color']}\n'
-                            wind_icon = net_dict['wind_icon_number']
-                            new_text1 = f'{object_line}  Threshold: {wind_zoom}\n  {color_line}\n'
-                            new_text2 = f'Icon: 0,0,{wdir_str},{wind_icon},{wspd_str}\n End:\n\n'
-                            self.all_placefile += f'{new_text1} {new_text2}'
-                            self.wind_placefile += f'{new_text1} {new_text2}'
+                    if wdir_str != 'NA' and wspd_str != 'NA':
+                        color_line = f'Color: {net_dict['wind']['color']}\n'
+                        wind_icon = net_dict['wind_icon_number']
+                        new_text1 = f'{object_line}  Threshold: {wind_zoom}\n  {color_line}\n'
+                        new_text2 = f'Icon: 0,0,{wdir_str},{wind_icon},{wspd_str}\n End:\n\n'
+                        self.all_placefile += f'{new_text1} {new_text2}'
+                        self.wind_placefile += f'{new_text1} {new_text2}'
 
-                        if t_str != 'NA':
-                            add_text = self.build_object(net_dict['t'], t_str)
+                    if t_str != 'NA':
+                        add_text = self.build_object(net_dict['t'], t_str)
+                        new_text = f'{object_line} {add_text}'
+                        self.all_placefile += new_text
+                        self.t_placefile += new_text
+
+                    if td_str != 'NA':
+                        add_text = self.build_object(net_dict['td'], td_str)
+                        new_text = f'{object_line} {add_text}'
+                        self.all_placefile += new_text
+                        self.td_placefile += new_text
+
+                    if vsby_str != 'NA':
+                        add_text = self.build_object(net_dict['vsby'], vsby_str)
+                        if 'P6SM' not in vsby_str:
                             new_text = f'{object_line} {add_text}'
-                            self.all_placefile += new_text
-                            self.t_placefile += new_text
+                            self.vsby_placefile += new_text
 
-                        if td_str != 'NA':
-                            add_text = self.build_object(net_dict['td'], td_str)
-                            new_text = f'{object_line} {add_text}'
-                            self.all_placefile += new_text
-                            self.td_placefile += new_text
+                    if t_str != 'NA' and td_str != 'NA':
+                        rh_text = self.return_rh_object(t_str, td_str)
+                        add_text = self.build_object(net_dict['rh'], rh_text)
+                        self.rh_placefile += f'{object_line} {add_text}'
 
-                        if vsby_str != 'NA':
-                            add_text = self.build_object(net_dict['vsby'], vsby_str)
-                            if 'P6SM' not in vsby_str:
-                                new_text = f'{object_line} {add_text}'
-                                self.vsby_placefile += new_text
+                    if wgst_str != 'NA' and wdir_str != 'NA':
+                        location, wgust_popup = self.gust_obj(wdir_str, wgst_str)
+                        font_code = net_dict['font_code']
+                        color_line = f'  Color: {net_dict['wgst']['color']}\n'
+                        new_text1 = f'{object_line}  Threshold: {wind_zoom}\n' 
+                        new_text2 = f'Text: {location},{font_code},{wgust_popup}\n End:\n\n'
+                        final_text = f'{new_text1} {color_line} {new_text2}'
+                        self.all_placefile += final_text
+                        self.wind_placefile += final_text
 
-                        if t_str != 'NA' and td_str != 'NA':
-                            rh_text = self.return_rh_object(t_str, td_str)
-                            add_text = self.build_object(net_dict['rh'], rh_text)
-                            self.rh_placefile += f'{object_line} {add_text}'
-
-                        if wgst_str != 'NA' and wdir_str != 'NA':
-                            location, wgust_popup = self.gust_obj(wdir_str, wgst_str)
-                            font_code = net_dict['font_code']
-                            color_line = f'  Color: {net_dict['wgst']['color']}\n'
-                            new_text1 = f'{object_line}  Threshold: {wind_zoom}\n' 
-                            new_text2 = f'Text: {location},{font_code},{wgust_popup}\n End:\n\n'
-                            final_text = f'{new_text1} {color_line} {new_text2}'
-                            self.all_placefile += final_text
-                            self.wind_placefile += final_text
-
-                        if rt_str != 'NA':
-                            self.all_placefile += f'{object_line}  Threshold: {other_zoom}\n{rt_str} End:\n\n'
-                            
-                    else:
-                        continue
-
+                    if rt_str != 'NA':
+                        self.all_placefile += f'{object_line}  Threshold: {other_zoom}\n{rt_str} End:\n\n'
                         
-                except KeyError as _ke:
+                else:
                     continue
 
 
