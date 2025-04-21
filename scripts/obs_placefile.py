@@ -166,27 +166,24 @@ class Mesowest(MesowestBase):
         -------------------------------------------------------------------------------
         """
         new_str = 'NA'
-        if num == 'NA':
-            return new_str
-        else:
+        if num != 'NA':
             numfloat = float(num)
-            if num != 'NA':
-                if short in ('t', 'dp', 'td', 'rt', 'rh'):
-                    new_value = int(round(numfloat))
-                    new_str = '" ' + str(new_value) + ' "'
-                elif short == 'wgst':
-                    new_value = int(round(numfloat,1))
-                    new_str = '" ' + str(new_value) + ' "'
-                elif short == 'vsby':
-                    vis_string = self.visibility_code(num)
-                    new_str = '" ' + vis_string + ' "'
-                elif short == 'wspd':
-                    new_value = self.placefile_wind_speed_code(numfloat)
-                    new_str = str(new_value)
-                elif short == 'wdir':
-                    new_value = int(num)
-                    new_str = str(new_value)
-                return new_str
+            if short in ('t', 'dp', 'td', 'rt', 'rh'):
+                new_value = int(round(numfloat))
+                new_str = '" ' + str(new_value) + ' "'
+            elif short == 'wgst':
+                new_value = int(round(numfloat,1))
+                new_str = '" ' + str(new_value) + ' "'
+            elif short == 'vsby':
+                vis_string = self.visibility_code(num)
+                new_str = '" ' + vis_string + ' "'
+            elif short == 'wspd':
+                new_value = self.placefile_wind_speed_code(numfloat)
+                new_str = str(new_value)
+            elif short == 'wdir':
+                new_value = int(num)
+                new_str = str(new_value)
+        return new_str
         
     def build_placefile(self):
         """
