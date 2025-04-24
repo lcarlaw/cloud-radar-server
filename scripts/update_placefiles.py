@@ -71,6 +71,7 @@ class UpdatePlacefiles():
 
         files = os.listdir(self.placefiles_directory)
         shifted_filenames = [x for x in files if "shifted.txt" in x]
+        now = datetime.now(pytz.utc) + timedelta(minutes=10)
         for file in shifted_filenames:
             source_file = os.path.join(self.placefiles_directory, file)
             new_filename = f"{source_file[0:source_file.index('_shifted.txt')]}_updated.txt"
@@ -85,20 +86,22 @@ class UpdatePlacefiles():
                         line_num = i
                         break
             try:
-                trimmed_lines = data[:line_num]
-
-                # Set the very last TimeRange value to be 10 minutes in the future from real time.
+                # Find entries that should be visible based on the current simulation time. Roll
+                # the "end" time forward 10 minutes from real time. 
                 # This gets around a bug in GR where the last polled volume scan is presumed to be
                 # real world time, even if the scan time is old. Is the latest TimeRange going to 
                 # always be at the end of the file? 
+                trimmed_lines = data[:line_num]
                 idx = [i for i, line in enumerate(trimmed_lines) if "TimeRange" in line]
-                if len(idx) > 0:
-                    latest_tr_string = trimmed_lines[idx[-1]]
-                    now = datetime.now(pytz.utc) + timedelta(minutes=10)
-                    original_time = latest_tr_string.split(' ')[2]
-                    new_tr = latest_tr_string.replace(original_time, now.strftime('%Y-%m-%dT%H:%M:%SZ\n'))
-                    trimmed_lines[idx[-1]] = new_tr
-
+                for line in idx:
+                    tr_string = trimmed_lines[line]
+                    end_valid_time = tr_string.split(' ')[2]
+                    end_valid_dt = datetime.strptime(end_valid_time, '%Y-%m-%dT%H:%M:%SZ\n')
+                    end_valid_dt = end_valid_dt.replace(tzinfo=pytz.UTC).timestamp()
+                    if end_valid_dt > self.playback_timestamp:
+                        new_tr = tr_string.replace(end_valid_time, 
+                                                   now.strftime('%Y-%m-%dT%H:%M:%SZ\n'))
+                        trimmed_lines[line] = new_tr
                 fout_path.writelines(trimmed_lines)
                 fout_path.close()
 
