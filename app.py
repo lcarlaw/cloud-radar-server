@@ -1062,9 +1062,9 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, 
     dir_list_sizes = 0
     log_string = f"Pre-processing scripts completed with good return status."
     if status == 0:
-        #for f in file_list:
-        #    size = os.stat(f).st_size
-        #    dir_list_sizes += size
+        for f in file_list:
+            size = os.stat(f).st_size
+            dir_list_sizes += size
         
         #if dir_list_sizes > 0: 
         playback_btn_disabled = False
