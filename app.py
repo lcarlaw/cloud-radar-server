@@ -34,7 +34,7 @@ import pytz
 import pandas as pd
 
 # from time import sleep
-from dash import Dash, html, Input, Output, dcc, ctx, State  # , callback
+from dash import Dash, html, Input, Output, dcc, ctx, State, no_update  # , callback
 from dash.exceptions import PreventUpdate
 # from dash import diskcache, DiskcacheManager, CeleryManager
 # from uuid import uuid4
@@ -984,18 +984,11 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
 
 
 @app.callback(
-    #Output('show_script_progress', 'children', allow_duplicate=True),
-    Output('sim_times', 'data', allow_duplicate=True),
-    [Input('run_scripts_btn', 'n_clicks'),
-     State('configs', 'data'),
-     State('sim_times', 'data'),
-     State('radar_info', 'data'),
-     State('start_year', 'value'),
-     State('start_month', 'value'),
-     State('start_day', 'value'),
-     State('start_hour', 'value'),
-     State('start_minute', 'value'),
-     State('duration', 'value')],
+    Output('show_script_progress', 'children', allow_duplicate=True),
+    #Output('sim_times', 'data', allow_duplicate=True),
+    Input('sim_times', 'data'),
+    State('configs', 'data'),
+    State('radar_info', 'data'),
     prevent_initial_call=True,
     running=[
         (Output('start_year', 'disabled'), True, False),
@@ -1018,30 +1011,54 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('change_time', 'disabled'), True, False),
         (Output('cancel_scripts', 'disabled'), False, True),
     ])
-def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, mn, dur):
+def launch_simulation(sim_times, configs, radar_info):
     """
-    This function is called when the "Run Scripts" button is clicked. It will execute the
-    necessary scripts to simulate radar operations, create hodographs, and transpose placefiles.
+    This function is called after the sim_times dcc.Store object is updated, which in
+    turn happens after Run Scripts is clicked.  
+
+    Function handles the processing of necessary scripts to simulate radar operations, 
+    create hodographs, and transpose placefiles.
     """
+    if not sim_times:
+        raise PreventUpdate
+
+    if config.PLATFORM != 'WINDOWS':
+        # try:
+        #     send_email(
+        #         subject="RSSiC simulation launched",
+        #         body="RSSiC simulation launched",
+        #         to_email="thomas.turnage@noaa.gov"
+        #     )
+        # except (smtplib.SMTPException, ConnectionError) as e:
+        #     print(f"Failed to send email: {e}")
+        remove_files_and_dirs(configs)
+        run_with_cancel_button(configs, sim_times, radar_info)
+    
+    return no_update
+
+@app.callback(
+    Output('sim_times', 'data', allow_duplicate=True),
+     [Input('run_scripts_btn', 'n_clicks'),
+     State('start_year', 'value'),
+     State('start_month', 'value'),
+     State('start_day', 'value'),
+     State('start_hour', 'value'),
+     State('start_minute', 'value'),
+     State('duration', 'value')],
+    prevent_initial_call=True,
+)
+def update_sim_times(n_clicks, yr, mo, dy, hr, mn, dur):
+    """
+    Update the sim_times dictionary and send to dcc.Store object when user clicks the
+    Run Scripts button. This was broken out of the launch_simulation callback to ensure
+    sim_times is immediately updated.
+    """
+    if not n_clicks:
+        raise PreventUpdate
+
     # Update the simulation times. 
     dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
     sim_times = make_simulation_times(dt, dur)
-
-    if n_clicks == 0:
-        raise PreventUpdate
-    else:
-        if config.PLATFORM != 'WINDOWS':
-            # try:
-            #     send_email(
-            #         subject="RSSiC simulation launched",
-            #         body="RSSiC simulation launched",
-            #         to_email="thomas.turnage@noaa.gov"
-            #     )
-            # except (smtplib.SMTPException, ConnectionError) as e:
-            #     print(f"Failed to send email: {e}")
-            remove_files_and_dirs(configs)
-            run_with_cancel_button(configs, sim_times, radar_info)
-    
     return sim_times
 
 ################################################################################################
@@ -1812,7 +1829,7 @@ if __name__ == '__main__':
                        dev_tools_hot_reload=False)
     else:
         if config.PLATFORM == 'DARWIN':
-            app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=False, 
+            app.run_server(host="0.0.0.0", port=8050, threaded=True, debug=False, 
                            use_reloader=False, dev_tools_hot_reload=False)
         else:
             app.run(debug=True, port=8050, threaded=True, dev_tools_hot_reload=False)
