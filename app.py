@@ -788,18 +788,35 @@ def call_function(func, *args, **kwargs):
 
 def run_with_cancel_button(cfg, sim_times, radar_info):
     """
-    This version of the script-launcher trying to work in cancel button
+    This version of the script-launcher trying to work in cancel button.
     """
+    log_simulation_settings(cfg, sim_times, radar_info)
     UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
 
-    # based on list of selected radars, create a dictionary of radar metadata
+    # Radar pre-processing
     try:
-        create_radar_dict(radar_info)
-        copy_grlevel2_cfg_file(cfg)
+        init_radar_info(cfg, radar_info)
     except (IOError, ValueError, KeyError) as e:
-        logging.exception(
-            "Error creating radar dict or config file: %s",e,exc_info=True)
-        
+        logging.exception("Error initializing simulation: %s", e, exc_info=True)
+        return
+    
+    if len(radar_info['radar_list']) > 0:
+        process_radar_files(cfg, sim_times, radar_info)
+
+    # Placefile generation
+    generate_placefiles(cfg, sim_times, radar_info)
+    generate_nse_placefiles(cfg, sim_times)
+    zip_files(cfg)
+
+    # Hodographs
+    generate_hodographs(cfg, sim_times, radar_info)
+    return 0
+
+
+def log_simulation_settings(cfg, sim_times, radar_info):
+    """
+    Logs the simulation settings for debugging and tracking purposes.
+    """
     log_string = (
         f"\n"
         f"=========================Simulation Settings========================\n"
@@ -810,60 +827,65 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     )
     logging.info(log_string)
 
-    if len(radar_info['radar_list']) > 0:
 
-        # Create initial dictionary of expected radar files.
-        # TO DO: report back issues with radar downloads (e.g. 0 files found)
-        res = call_function(query_radar_files, cfg, radar_info, sim_times)
+def init_radar_info(cfg, radar_info):
+    """
+    Creates a dictionary of radar sites and their metadata based on user selections.
+    Copies the grlevel2.cfg file to the polling directory(ies).
+    """
+    create_radar_dict(radar_info)
+    copy_grlevel2_cfg_file(cfg)
+
+
+def process_radar_files(cfg, sim_times, radar_info):
+    # Create initial dictionary of expected radar files.
+    # TO DO: report back issues with radar downloads (e.g. 0 files found)
+    res = call_function(query_radar_files, cfg, radar_info, sim_times)
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        return
+
+    # Radar downloading and mungering steps
+    for _r, radar in enumerate(radar_info['radar_list']):
+        radar = radar.upper()
+        try:
+            if radar_info['new_radar'] == 'None':
+                new_radar = radar
+            else:
+                new_radar = radar_info['new_radar'].upper()
+        except (IOError, ValueError, KeyError) as e:
+            logging.exception("Error defining new radar: %s",e,exc_info=True)
+
+        # --------- Links Page -----------------------------------------------------
+        args = [cfg['LINK_BASE'], cfg['LINKS_HTML_PAGE']]
+        res = call_function(utils.exec_script, Path(cfg['LINKS_PAGE_SCRIPT_PATH']),
+                            args, cfg['SESSION_ID'])
         if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
             return
 
-        # Radar downloading and mungering steps
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
+        # Radar download
+        args = [radar, str(sim_times['event_start_str']),
+                str(sim_times['event_duration']), str(True), cfg['RADAR_DIR']]
+        res = call_function(utils.exec_script, Path(cfg['NEXRAD_SCRIPT_PATH']),
+                            args, cfg['SESSION_ID'])
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            return
 
-            # --------- Links Page -----------------------------------------------------
-            #cfg['LINK_BASE'], cfg['LINKS_HTML_PAGE']
-            args = [cfg['LINK_BASE'], cfg['LINKS_HTML_PAGE']]
-            res = call_function(utils.exec_script, Path(cfg['LINKS_PAGE_SCRIPT_PATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
+        # Munger
+        args = [radar, str(sim_times['playback_start_str']),
+                str(sim_times['event_duration']),
+                str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
+                cfg['POLLING_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['L2MUNGER_FILEPATH'], 
+                cfg['DEBZ_FILEPATH'], new_radar]
+        res = call_function(utils.exec_script, Path(cfg['MUNGER_SCRIPT_FILEPATH']),
+                            args, cfg['SESSION_ID'])
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            return
 
-            # Radar download
-            args = [radar, str(sim_times['event_start_str']),
-                    str(sim_times['event_duration']), str(True), cfg['RADAR_DIR']]
-            res = call_function(utils.exec_script, Path(cfg['NEXRAD_SCRIPT_PATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # Munger
-            args = [radar, str(sim_times['playback_start_str']),
-                    str(sim_times['event_duration']),
-                    str(sim_times['simulation_seconds_shift']
-                        ), cfg['RADAR_DIR'],
-                    cfg['POLLING_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['L2MUNGER_FILEPATH'], cfg['DEBZ_FILEPATH'],
-                    new_radar]
-            res = call_function(utils.exec_script, Path(cfg['MUNGER_SCRIPT_FILEPATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # this gives the user some radar data to poll while other scripts are running
-            try:
-                UpdateDirList(new_radar, 'None',
-                              cfg['POLLING_DIR'], initialize=True)
-            except (IOError, ValueError, KeyError) as e:
-                print(f"Error with UpdateDirList: {e}")
-                logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
+        # this gives the user some radar data to poll while other scripts are running
+        try:
+            UpdateDirList(new_radar, 'None', cfg['POLLING_DIR'], initialize=True)
+        except (IOError, ValueError, KeyError) as e:
+            logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
 
     # Delete the uncompressed/munged radar files from the data directory
     try:
@@ -872,8 +894,21 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         logging.exception("Error removing munged radar files ", exc_info=True)
 
 
+def finalize_simulation(cfg, sim_times, radar_info):
+    """
+    Finalizes the simulation by generating placefiles, zipping files, and updating directories.
+    """
+    generate_placefiles(cfg, sim_times, radar_info)
+    zip_files(cfg)
+    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
+    generate_hodographs(cfg, sim_times, radar_info)
+
+
+def generate_placefiles(cfg, sim_times, radar_info):
+    """
+    Generates non-nse placefiles for simulation
+    """
     # --------- LSR Placefiles -----------------------------------------------------
-    #  Not monitored currently due to how quick this executes
     # center lat, center lon, event start, duration, LSR csv source dir, placefile output dir
     args = [str(radar_info['lat']), str(radar_info['lon']),
             str(sim_times['event_start_str']), str(sim_times['event_duration']),
@@ -892,12 +927,6 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
 
-    # Now that all radar files are in assets/{}/downloads dir, zip them up
-    try:
-        zip_downloadable_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error zipping radar files ", exc_info=True)
-
     # --------- Surface observations placefiles -------------------------------------
     # center lat, center lon, start timestr, duration, placefile output directory
     args = [str(radar_info['lat']), str(radar_info['lon']),
@@ -911,8 +940,8 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     # --------- ProbSevere download -------------------------------------------------
     args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
             cfg['PROBSEVERE_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
+    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']), 
+                        args, cfg['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
 
@@ -920,12 +949,13 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     # -- center lat, center lon, data source directory, placefile output directory --
     args = [str(radar_info['lat']), str(radar_info['lon']),cfg['PROBSEVERE_DIR'],
             cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_PLACEFILE_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
+    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_PLACEFILE_SCRIPT_PATH']), 
+                        args, cfg['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
 
-    # --------- NSE placefiles ------------------------------------------------------
+    
+def generate_nse_placefiles(cfg, sim_times):
     args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
             cfg['SCRIPTS_DIR'], cfg['DATA_DIR'], cfg['PLACEFILES_DIR']]
     res = call_function(utils.exec_script, Path(cfg['NSE_SCRIPT_PATH']), args,
@@ -933,32 +963,22 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
 
-    # Now that all original placefiles should be available, zip them up
+
+def zip_files(cfg):
+    """
+    Zips radar files and placefiles for download.
+    """
     try:
+        zip_downloadable_radar_files(cfg)
         zip_original_placefiles(cfg)
     except KeyError as e:
-        logging.exception("Error zipping original placefiles ", exc_info=True)
+        logging.exception("Error zipping files: %s", e, exc_info=True)
 
-    # There always is a timeshift with a simulation, so this script needs to
-    # execute every time, even if a user doesn't select a radar to transpose to.
-    logging.info("Entering function run_transpose_script")
-    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
 
-    # --------- Soundings ---------------------------------------------------------
-   #radar_dict = {'KGRR': {'lat':42.8939, 'lon':-85.54479},
-   #               'KDTX': {'lat':42.69997, 'lon':-83.47167}}
-    #SIM_START = '2024-05-07 21:30'
-    #ASSETS_DIR = '/data/cloud-radar-server/assets'
-    #if sys.platform.startswith('win'):
-    #    Gr2aSoundings(radar_dict, SIM_START, '120', '24835500', ASSETS_DIR)
-    #args = [radar_info, str(sim_times['event_start_str']), str(sim_times['event_duration']),
-    #            str(sim_times['simulation_seconds_shift']), cfg['ASSETS_DIR']]
-    #res = call_function(utils.exec_script, Path(cfg['SOUNDINGS_SCRIPT_PATH']), args,
-    #                    cfg['SESSION_ID'])
-    #if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-    #    return
-
-    # --------- Hodographs ---------------------------------------------------------
+def generate_hodographs(cfg, sim_times, radar_info):
+    """
+    Generates hodographs for the simulation.
+    """
     for radar, data in radar_info['radar_dict'].items():
         try:
             asos_one = data['asos_one']
@@ -981,10 +1001,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         except (IOError, ValueError, KeyError) as e:
             print("Error updating hodo html: ", e)
             logging.exception("Error updating hodo html: %s",e, exc_info=True)
-    
-    # If scripts successfully run to completion, 0 status is returned. Otherwise, this
-    # will be a None object.
-    return 0
+
 
 @app.callback(
     #Output('show_script_progress', 'children', allow_duplicate=True),
