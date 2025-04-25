@@ -991,6 +991,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     Output('sim_times', 'data', allow_duplicate=True),
     Output('playback_btn', 'disabled', allow_duplicate=True),
     Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
+    Output('cancel_scripts', 'disabled'), 
     [Input('run_scripts_btn', 'n_clicks'),
      State('configs', 'data'),
      State('sim_times', 'data'),
@@ -1015,13 +1016,13 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('run_scripts_btn', 'disabled'), True, False),
         # (Output('playback_clock_store', 'disabled'), True, False),
         (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
-        (Output('playback_btn', 'disabled'), True, True),  # add start sim btn
+        (Output('playback_btn', 'disabled'), True, False),  # leave this alone
         (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
-        (Output('refresh_polling_btn', 'disabled'), True, True),
+        (Output('refresh_polling_btn', 'disabled'), True, False), # leave this alone
         (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
         # wait to enable change time dropdown
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False), # leave this alone
     ])
 def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, mn, dur):
     """
@@ -1035,6 +1036,7 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, 
     status = None 
     playback_btn_disabled = True
     refresh_polling_btn_disabled = True
+    cancel_btn_disabled = True # Set disabling after scripts finish, or once clicked
 
     if n_clicks == 0:
         raise PreventUpdate
@@ -1051,28 +1053,29 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, 
             remove_files_and_dirs(configs)
             status = run_with_cancel_button(configs, sim_times, radar_info)
     
-    # Activate playback_btn and refresh_polling_btn if dir.list file(s) have been created.
-    # This check is to avoid the launch simulation and refresh polling buttons from becoming
-    # clickable if a user cancels the processing scripts. run_with_cancel_button returns None
-    # if not a clean exit (i.e. user hits cancel button).  
+    # Activate playback_btn and refresh_polling_btn if good return from pre-processing
+    # functions. If user clicks cancel, do not allow them to start a simulation. 
+    # Update to this callback also attempt to handle various sim clock control buttons
+    # incorrectly becoming clickable while pre-processing scripts are still running, even
+    # though they're set within the running=[] argument above. 
     file_list = glob(f"{configs['POLLING_DIR']}/**/dir.list", recursive=True)
     dir_list_sizes = 0
     log_string = f"Pre-processing scripts completed with good return status."
     if status == 0:
-        for f in file_list:
-            size = os.stat(f).st_size
-            dir_list_sizes += size
+        #for f in file_list:
+        #    size = os.stat(f).st_size
+        #    dir_list_sizes += size
         
-        if dir_list_sizes > 0: 
-            playback_btn_disabled = False
-            refresh_polling_btn_disabled = False
+        #if dir_list_sizes > 0: 
+        playback_btn_disabled = False
+        refresh_polling_btn_disabled = False
     else:    
         log_string = f"Pre-processing scripts cancelled by user."
     
     logging.info(log_string)
     logging.info(f"{len(file_list)} dir.list file(s) found. Total size: {dir_list_sizes} bytes.")
 
-    return sim_times, playback_btn_disabled, refresh_polling_btn_disabled
+    return sim_times, playback_btn_disabled, refresh_polling_btn_disabled, cancel_btn_disabled
 
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
