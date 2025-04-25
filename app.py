@@ -989,7 +989,13 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     [Input('run_scripts_btn', 'n_clicks'),
      State('configs', 'data'),
      State('sim_times', 'data'),
-     State('radar_info', 'data')],
+     State('radar_info', 'data'),
+     State('start_year', 'value'),
+     State('start_month', 'value'),
+     State('start_day', 'value'),
+     State('start_hour', 'value'),
+     State('start_minute', 'value'),
+     State('duration', 'value')],
     prevent_initial_call=True,
     running=[
         (Output('start_year', 'disabled'), True, False),
@@ -1012,15 +1018,14 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('change_time', 'disabled'), True, False),
         (Output('cancel_scripts', 'disabled'), False, True),
     ])
-def launch_simulation(n_clicks, configs, sim_times, radar_info):
+def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, mn, dur):
     """
     This function is called when the "Run Scripts" button is clicked. It will execute the
     necessary scripts to simulate radar operations, create hodographs, and transpose placefiles.
     """
     # Update the simulation times. 
-    event_dt = datetime.strptime(sim_times['event_start_str'], '%Y-%m-%d %H:%M')
-    event_dt = pytz.utc.localize(event_dt)
-    sim_times = make_simulation_times(event_dt, sim_times['event_duration'])
+    dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
+    sim_times = make_simulation_times(dt, dur)
 
     if n_clicks == 0:
         raise PreventUpdate
@@ -1254,6 +1259,19 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         refresh_polling_btn_disabled = True
         run_scripts_btn_disabled = True
 
+    log_string = (
+        f"\n"
+        f"*************************Playback Launched**************************\n"
+        f"Session ID: {cfg['SESSION_ID']}\n"
+        f"Start: {sim_times['playback_start_str']}, End: {sim_times['playback_end_str']}\n"
+        f"Start dt: {sim_times['playback_start']}, End dt: {sim_times['playback_end']}\n"
+        f"Launch Simulation Button Disabled?: {btn_disabled}\n"
+        f"Pause Playback Button Disabled?: {False}\n"
+        f"Refresh Polling Button Disabled?: {refresh_polling_btn_disabled}\n"
+        f"********************************************************************\n"
+    )
+    logging.info(log_string)
+
     return (btn_text, btn_disabled, False, playback_running, start, style, end, style, options,
             False, playback_specs, refresh_polling_btn_disabled, run_scripts_btn_disabled)
 
@@ -1437,7 +1455,7 @@ def update_playback_speed(selected_speed) -> float:
 ################################################################################################
 @app.callback(
     Output('show_time_data', 'children'),
-    Output('sim_times', 'data'),
+    #Output('sim_times', 'data'),
     [Input('start_year', 'value'),
      Input('start_month', 'value'),
      Input('start_day', 'value'),
@@ -1453,8 +1471,9 @@ def get_sim(yr, mo, dy, hr, mn, dur) -> str:
     """
     dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
     line = f'{dt.strftime("%Y-%m-%d %H:%M")}Z ____ {dur} minutes'
-    sim_times = make_simulation_times(dt, dur)
-    return line, sim_times
+    #sim_times = make_simulation_times(dt, dur)
+    #return line, sim_times
+    return line
 
 
 @app.callback(
@@ -1793,8 +1812,7 @@ if __name__ == '__main__':
                        dev_tools_hot_reload=False)
     else:
         if config.PLATFORM == 'DARWIN':
-            app.run(host="0.0.0.0", port=8051, threaded=True, debug=False, use_reloader=False,
-                    dev_tools_hot_reload=False)
+            app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=False, 
+                           use_reloader=False, dev_tools_hot_reload=False)
         else:
-            app.run(debug=True, port=8050, threaded=True,
-                    dev_tools_hot_reload=False)
+            app.run(debug=True, port=8050, threaded=True, dev_tools_hot_reload=False)
