@@ -964,6 +964,21 @@ def generate_nse_placefiles(cfg, sim_times):
         return
 
 
+#def generate_soundings():
+    #radar_dict = {'KGRR': {'lat':42.8939, 'lon':-85.54479},
+    #               'KDTX': {'lat':42.69997, 'lon':-83.47167}}
+    #SIM_START = '2024-05-07 21:30'
+    #ASSETS_DIR = '/data/cloud-radar-server/assets'
+    #if sys.platform.startswith('win'):
+    #    Gr2aSoundings(radar_dict, SIM_START, '120', '24835500', ASSETS_DIR)
+    #args = [radar_info, str(sim_times['event_start_str']), str(sim_times['event_duration']),
+    #            str(sim_times['simulation_seconds_shift']), cfg['ASSETS_DIR']]
+    #res = call_function(utils.exec_script, Path(cfg['SOUNDINGS_SCRIPT_PATH']), args,
+    #                    cfg['SESSION_ID'])
+    #if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+    #    return
+
+
 def zip_files(cfg):
     """
     Zips radar files and placefiles for download.
