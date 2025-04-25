@@ -806,6 +806,13 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     # Placefile generation
     generate_placefiles(cfg, sim_times, radar_info)
     generate_nse_placefiles(cfg, sim_times)
+
+    # There always is a timeshift with a simulation, so this script needs to
+    # execute every time, even if a user doesn't select a radar to transpose to.
+    logging.info("Entering function run_transpose_script")
+    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
+    
+    # Zip the original placefiles
     zip_files(cfg)
 
     # Hodographs
@@ -892,16 +899,6 @@ def process_radar_files(cfg, sim_times, radar_info):
         remove_munged_radar_files(cfg)
     except KeyError as e:
         logging.exception("Error removing munged radar files ", exc_info=True)
-
-
-def finalize_simulation(cfg, sim_times, radar_info):
-    """
-    Finalizes the simulation by generating placefiles, zipping files, and updating directories.
-    """
-    generate_placefiles(cfg, sim_times, radar_info)
-    zip_files(cfg)
-    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
-    generate_hodographs(cfg, sim_times, radar_info)
 
 
 def generate_placefiles(cfg, sim_times, radar_info):
