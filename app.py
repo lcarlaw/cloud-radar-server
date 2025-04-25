@@ -982,10 +982,15 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
             print("Error updating hodo html: ", e)
             logging.exception("Error updating hodo html: %s",e, exc_info=True)
 
+    # If scripts successfully run to completion, 0 status is returned. Otherwise, this
+    # will be a None object.
+    return 0
 
 @app.callback(
     #Output('show_script_progress', 'children', allow_duplicate=True),
     Output('sim_times', 'data', allow_duplicate=True),
+    Output('playback_btn', 'disabled', allow_duplicate=True),
+    Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
     [Input('run_scripts_btn', 'n_clicks'),
      State('configs', 'data'),
      State('sim_times', 'data'),
@@ -1010,9 +1015,9 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('run_scripts_btn', 'disabled'), True, False),
         # (Output('playback_clock_store', 'disabled'), True, False),
         (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
-        (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
+        (Output('playback_btn', 'disabled'), True, True),  # add start sim btn
         (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
-        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('refresh_polling_btn', 'disabled'), True, True),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
         # wait to enable change time dropdown
         (Output('change_time', 'disabled'), True, False),
@@ -1027,6 +1032,10 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, 
     dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
     sim_times = make_simulation_times(dt, dur)
 
+    status = None 
+    playback_btn_disabled = True
+    refresh_polling_btn_disabled = True
+
     if n_clicks == 0:
         raise PreventUpdate
     else:
@@ -1040,9 +1049,30 @@ def launch_simulation(n_clicks, configs, sim_times, radar_info, yr, mo, dy, hr, 
             # except (smtplib.SMTPException, ConnectionError) as e:
             #     print(f"Failed to send email: {e}")
             remove_files_and_dirs(configs)
-            run_with_cancel_button(configs, sim_times, radar_info)
+            status = run_with_cancel_button(configs, sim_times, radar_info)
     
-    return sim_times
+    # Activate playback_btn and refresh_polling_btn if dir.list file(s) have been created.
+    # This check is to avoid the launch simulation and refresh polling buttons from becoming
+    # clickable if a user cancels the processing scripts. run_with_cancel_button returns None
+    # if not a clean exit (i.e. user hits cancel button).  
+    file_list = glob(f"{configs['POLLING_DIR']}/**/dir.list", recursive=True)
+    dir_list_sizes = 0
+    log_string = f"Pre-processing scripts completed with good return status."
+    if status == 0:
+        for f in file_list:
+            size = os.stat(f).st_size
+            dir_list_sizes += size
+        
+        if dir_list_sizes > 0: 
+            playback_btn_disabled = False
+            refresh_polling_btn_disabled = False
+    else:    
+        log_string = f"Pre-processing scripts cancelled by user."
+    
+    logging.info(log_string)
+    logging.info(f"{len(file_list)} dir.list file(s) found. Total size: {dir_list_sizes} bytes.")
+
+    return sim_times, playback_btn_disabled, refresh_polling_btn_disabled
 
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
