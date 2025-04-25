@@ -34,7 +34,7 @@ import pytz
 import pandas as pd
 
 # from time import sleep
-from dash import Dash, html, Input, Output, dcc, ctx, State  # , callback
+from dash import Dash, html, Input, Output, dcc, ctx, State, no_update  # , callback
 from dash.exceptions import PreventUpdate
 # from dash import diskcache, DiskcacheManager, CeleryManager
 # from uuid import uuid4
@@ -1016,9 +1016,9 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('run_scripts_btn', 'disabled'), True, False),
         # (Output('playback_clock_store', 'disabled'), True, False),
         (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
-        #(Output('playback_btn', 'disabled'), True, False),  # leave this alone
+        (Output('playback_btn', 'disabled'), True, no_update),  # leave this alone
         (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
-        #(Output('refresh_polling_btn', 'disabled'), True, False), # leave this alone
+        (Output('refresh_polling_btn', 'disabled'), True, no_update), # leave this alone
         (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
         # wait to enable change time dropdown
         (Output('change_time', 'disabled'), True, False),
