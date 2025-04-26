@@ -991,7 +991,26 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     State('configs', 'data'),
     State('radar_info', 'data'),
     prevent_initial_call=True,
-)
+    running=[
+        (Output('start_year', 'disabled'), True, False),
+        (Output('start_month', 'disabled'), True, False),
+        (Output('start_day', 'disabled'), True, False),
+        (Output('start_hour', 'disabled'), True, False),
+        (Output('start_minute', 'disabled'), True, False),
+        (Output('duration', 'disabled'), True, False),
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
+        (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
+        # wait to enable change time dropdown
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
@@ -1088,7 +1107,7 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     logging.info(log_string)
     return sim_times, script_status
 
-
+'''
 @app.callback(
     # Simulation button controls
     Output('run_scripts_btn', 'disabled', allow_duplicate=True),
@@ -1127,7 +1146,7 @@ def update_button_states(status):
     elif status == 'cancelled':
         button_disabled_states = [False,True,True,launch,True,True]+falses
     return button_disabled_states
-
+'''
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
 ################################################################################################
