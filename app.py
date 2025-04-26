@@ -1009,7 +1009,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
         # wait to enable change time dropdown
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     """
