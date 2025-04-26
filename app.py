@@ -1001,7 +1001,6 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('map_btn', 'disabled'), True, False),
         (Output('new_radar_selection', 'disabled'), True, False),
         (Output('run_scripts_btn', 'disabled'), True, False),
-        # (Output('playback_clock_store', 'disabled'), True, False),
         (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
         (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
         (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
@@ -1019,21 +1018,27 @@ def launch_simulation(sim_times, configs, radar_info):
     Function handles the processing of necessary scripts to simulate radar operations, 
     create hodographs, and transpose placefiles.
     """
-    # Do not run the processing scripts if the refresh button was clicked. 
-    if not sim_times or sim_times.get('source') != 'run_scripts_btn':
-        raise PreventUpdate
-    
-    if config.PLATFORM != 'WINDOWS':
-        # try:
-        #     send_email(
-        #         subject="RSSiC simulation launched",
-        #         body="RSSiC simulation launched",
-        #         to_email="thomas.turnage@noaa.gov"
-        #     )
-        # except (smtplib.SMTPException, ConnectionError) as e:
-        #     print(f"Failed to send email: {e}")
+    # Run the regular pre-processing scripts
+    if sim_times.get('source') == 'run_scripts_btn':
+        #if config.PLATFORM != 'WINDOWS':
+            # try:
+            #     send_email(
+            #         subject="RSSiC simulation launched",
+            #         body="RSSiC simulation launched",
+            #         to_email="thomas.turnage@noaa.gov"
+            #     )
+            # except (smtplib.SMTPException, ConnectionError) as e:
+            #     print(f"Failed to send email: {e}")
         remove_files_and_dirs(configs)
         run_with_cancel_button(configs, sim_times, radar_info)
+
+    # Run the refresh polling scripts
+    elif sim_times.get('source') == 'refresh_polling_btn':
+        run_refresh_scripts(sim_times, configs, radar_info)
+    
+    else:
+        logging.warning(f"Unrecognized source in sim_times: {sim_times.get('source')}")
+        raise PreventUpdate
     
     return no_update
 
@@ -1534,32 +1539,9 @@ def update_day_dropdown(selected_year, selected_month):
 # Polling Times" button will execute this callback which will regenerate new simulation times
 # based on the current real world time. It will rerun l2munger, shift_placefiles, and will 
 # regenerate dir.list, event_times, file_times, and hodographs. 
-@app.callback(
-    #Output('sim_times', 'data', allow_duplicate=True),
-    Output('playback_btn', 'children', allow_duplicate=True),
-    Output('playback_btn', 'disabled', allow_duplicate=True),
-    Output('pause_resume_playback_btn', 'children', allow_duplicate=True),
-    Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),
-    #[Input('refresh_polling_btn', 'n_clicks'),
-    [Input('sim_times', 'data'),
-     State('configs', 'data'),
-     State('radar_info', 'data')],
-    prevent_initial_call=True,
-)
-def refresh_polling(sim_times, cfg, radar_info): 
-    # Do not run if the run scripts button was clicked. 
-    if not sim_times or sim_times.get('source') != 'refresh_polling_btn':
-        raise PreventUpdate
-        
-    logging.info(f"Re-syncing polling times to current time")
-    logging.info(f"Original sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
-    
-    # sim_times updated in function update_sim_times by button-click.
-    logging.info(f"Updated sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
-    run_refresh_scripts(sim_times, cfg, radar_info)
-    return 'Launch Simulation', False, 'Pause Playback', True
 
-
+# The following is called farther above by the launch_simulation callback if the refresh button
+# is clicked.
 def run_refresh_scripts(sim_times, cfg, radar_info): 
     # Remove the original file_times.txt file. This will get re-created by munger.py
     try:
