@@ -1010,9 +1010,27 @@ def query_and_download_radars(status, radar_info, configs, sim_times):
     if not status:
         raise PreventUpdate
     
+    # based on list of selected radars, create a dictionary of radar metadata
+    try:
+        create_radar_dict(radar_info)
+        copy_grlevel2_cfg_file(configs)
+    except (IOError, ValueError, KeyError) as e:
+        logging.exception("Error creating radar dict or cfg file: %s",e,exc_info=True)
+        
     scripts_running = True 
     radar_list = radar_info.get('radar_list', [])
     session_id = configs['SESSION_ID']
+
+    # Write the links html page. 
+    try:
+        args = [configs['LINK_BASE'], configs['LINKS_HTML_PAGE']]
+        res = call_function(utils.exec_script, Path(configs['LINKS_PAGE_SCRIPT_PATH']),
+                            args, session_id)
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            return False, scripts_running
+    except Exception as e:
+        logging.exception("Error creating links.html page")
+        return False, scripts_running
 
     # Query all radar files
     try:
