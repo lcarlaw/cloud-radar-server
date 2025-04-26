@@ -111,10 +111,12 @@ monthnames = ["January", "February", "March", "April", "May", "June", "July", "A
 
 top_section = html.Div([], style={'height': '5px'})
 
-
+WARNING_TEXT = "The application is undergoing testing and maintenance. Simulations won't be available. We apologize for the inconvenience!"
 top_content = [
     dbc.CardBody([html.H2("Radar Simulation Server in the Cloud", className="card-title",
                           style={'font-weight': 'bold', 'font-style': 'italic'}),
+                  html.H2(WARNING_TEXT, className="card-title",
+                          style={'font-weight': 'bold', 'color': 'red'}),
                   html.H5(
         "Providing radar simulations for NOAA/NWS training ...",
         className="card-text", style={'color': 'rgb(52,152,219)', 'font-weight': 'bold',
