@@ -567,14 +567,15 @@ def generate_layout(layout_has_initialized, children, configs):
 
             # For processing callbacks 
             dcc.Store(id='trigger_query_and_download_radar', data=False),
+            dcc.Store(id='trigger_munger_radar', data=False),
             dcc.Store(id='trigger_placefiles', data=False),
             dcc.Store(id='trigger_nse_placefiles', data=False),
             dcc.Store(id='trigger_hodographs', data=False),
  
             dcc.Store(id='trigger_next', data=False),
             dcc.Store(id='radar_list'),
+            dcc.Store(id='current_site_index', data=0), # used in recursive mungering callback
 
-            dcc.Store(id='trigger_munge_radar', data=False),
             #dcc.Interval(id='munging_interval', interval=10000, n_intervals=0, disabled=True),
 
             # For app/script monitoring
@@ -804,36 +805,9 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
 
 
     if len(radar_info['radar_list']) > 0:
-
-
-        # Radar downloading and mungering steps
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-
-            # Munger
-            args = [radar, str(sim_times['playback_start_str']),
-                    str(sim_times['event_duration']),
-                    str(sim_times['simulation_seconds_shift']
-                        ), cfg['RADAR_DIR'],
-                    cfg['POLLING_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['L2MUNGER_FILEPATH'], cfg['DEBZ_FILEPATH'],
-                    new_radar]
-            res = call_function(utils.exec_script, Path(cfg['MUNGER_SCRIPT_FILEPATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
             # this gives the user some radar data to poll while other scripts are running
             try:
-                UpdateDirList(new_radar, 'None',
-                              cfg['POLLING_DIR'], initialize=True)
+                UpdateDirList(new_radar, 'None', cfg['POLLING_DIR'], initialize=True)
             except (IOError, ValueError, KeyError) as e:
                 print(f"Error with UpdateDirList: {e}")
                 logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
@@ -879,11 +853,16 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     #    return
 
 
-
+########################################################################################
+# query_and_download_radars is always triggered by the coordinator callback, and serves 
+# as the main callback that daisy chains all of the other processing callbacks together.
+# A separate dcc.Store object called scripts_to_run stores information about which 
+# scripts are to be run, and can manually be set to True or False for debugging purposes.
 # ----------------------- Step 1: Query and download radar files -----------------------
 @app.callback(
-    Output('trigger_placefiles', 'data'), # When we get munger working, change this. We're skipping right now.
+    Output('trigger_munger_radar', 'data'), 
     Output('radar_info', 'data', allow_duplicate=True),
+    Output('radar_list', 'data'),
     Input('trigger_query_and_download_radar', 'data'),
     State('scripts_to_run', 'data'),
     State('radar_info', 'data'),
@@ -923,20 +902,20 @@ def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_ti
             res = call_function(utils.exec_script, Path(configs['LINKS_PAGE_SCRIPT_PATH']),
                                 args, session_id)
             if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return False, radar_info
+                return False, radar_info, []
         except Exception as e:
             logging.exception("Error creating links.html page")
-            return False, radar_info
+            return False, radar_info, []
 
         # Query all radar files
         try:
             res = call_function(query_radar_files, configs, radar_info, sim_times)
             if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
                 logging.warning("Query radar files was cancelled.")
-                return False, radar_info
+                return False, radar_info, []
         except Exception as e:
             logging.exception("Radar file query failed.")
-            return False, radar_info
+            return False, radar_info, []
 
         # Download all radar files
         for radar in radar_list:
@@ -949,21 +928,74 @@ def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_ti
                                     args, session_id)
                 if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
                     logging.warning(f"Radar download for {radar} was cancelled.")
-                    return False, radar_info
+                    return False, radar_info, []
             except Exception as e:
                 logging.exception(f"Radar download failed for {radar}")
-                return False, radar_info
+                return False, radar_info, []
 
         logging.info(f"Downloads completed for radars: {radar_list}")
 
     else: 
         logging.info("Skipping radar download step.")
 
-    trigger_munge_radar = True
-    return trigger_munge_radar, radar_info
+    trigger_munger_radar = True
+    return trigger_munger_radar, radar_info, radar_list
 
 # ----------------------------- Step 2: Munge radar files -----------------------------
+@app.callback(
+    Output('trigger_placefiles', 'data'),
+    Input('trigger_munger_radar', 'data'),
+    State('scripts_to_run', 'data'),
+    State('radar_list', 'data'),
+    State('radar_info', 'data'),
+    State('configs', 'data'),
+    State('sim_times', 'data'), 
+    prevent_initial_call=True,
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
+def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_times):
+    if not start: 
+        raise PreventUpdate
 
+    # We will always munger radar. We only include an if block here for debugging/testing 
+    if scripts_to_run['munger_radar']:
+        for radar in radar_list:
+            radar = radar.upper()  
+            try:
+                if radar_info['new_radar'] == 'None':
+                    new_radar = radar
+                else:
+                    new_radar = radar_info['new_radar'].upper()
+            except (IOError, ValueError, KeyError) as e:
+                logging.exception("Error defining new radar: %s",e,exc_info=True)
+
+            args = [radar, str(sim_times['playback_start_str']), 
+                    str(sim_times['event_duration']),
+                    str(sim_times['simulation_seconds_shift']), configs['RADAR_DIR'],
+                    configs['POLLING_DIR'], configs['USER_DOWNLOADS_DIR'], 
+                    configs['L2MUNGER_FILEPATH'], configs['DEBZ_FILEPATH'],
+                    new_radar]
+            res = call_function(utils.exec_script, Path(configs['MUNGER_SCRIPT_FILEPATH']),
+                                args, configs['SESSION_ID'])
+            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+                logging.warning(f"Munging for {radar} was cancelled.")
+                return False
+    else: 
+        logging.info("Skipping radar mungering step.")
+
+    trigger_placefiles = True
+    return trigger_placefiles
 
 # ------------------------------ Step 3: Fast placefiles- -----------------------------
 @app.callback(
@@ -1200,9 +1232,10 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
 
         scripts_to_run = {
             'query_and_download_radar': True,
-            'placefiles': True,
-            'nse_placefiles': True,
-            'hodographs': True
+            'munger_radar': True,
+            'placefiles': False,
+            'nse_placefiles': False,
+            'hodographs': False
         }
         # This sets off the chain of processing scripts
         return trigger_query_and_download_radar, scripts_to_run
@@ -2019,7 +2052,7 @@ if __name__ == '__main__':
                        dev_tools_hot_reload=False)
     else:
         if config.PLATFORM == 'DARWIN':
-            app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=True, 
+            app.run_server(host="0.0.0.0", port=8050, threaded=True, debug=True, 
                            use_reloader=False, dev_tools_hot_reload=False)
         else:
             app.run(debug=True, port=8050, threaded=True, dev_tools_hot_reload=False)

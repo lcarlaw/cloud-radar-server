@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 import time
 import pytz
 from pathlib import Path
+from multiprocessing import Pool
 
 #from config import RADAR_DIR, POLLING_DIR, L2MUNGER_FILEPATH, DEBZ_FILEPATH
 
@@ -64,13 +65,14 @@ class Munger():
 
         self.l2munger_filepath = Path(L2MUNGER_FILEPATH)
         self.debz_filepath = Path(DEBZ_FILEPATH)
+        self.source_files = list(self.source_directory.glob('*'))
         os.makedirs(self.this_radar_polling_dir, exist_ok=True)
 
         self.copy_l2munger_executable()
-        self.uncompress_files()
+        self.uncompress_files_parallel()
         self.uncompressed_files = list(self.source_directory.glob('*uncompressed'))
         # commence munging
-        self.munge_files()
+        self.munge_files_parallel()
 
     def copy_l2munger_executable(self) -> None:
         """
@@ -83,45 +85,34 @@ class Munger():
         os.system(cp_cmd)
 
 
-    def uncompress_files(self) -> None:
+    def uncompress_file(self, original_file) -> None:
         """
         recent archived files are compressed with bzip2
         earlier files are compressed with gzip
         example command line:
             python debz.py KBRO20170825_195747_V06 KBRO20170825_195747_V06.uncompressed
         """
-
-        os.chdir(self.source_directory)
-        self.source_files = list(self.source_directory.glob('*'))
-
-        for original_file in self.source_files:
-            filename_str = str(original_file)
-            print(f'Uncompressing {filename_str}')
-            if original_file.suffix == '.gz':
-                # unsure if ungzip'ed file needs to be passed to debz.py
-                # Edit 6/28: keep original compressed file used for radar status tracking.
-                filename_str = filename_str[:-3]
-                # The following commands were erroring out (no .gz extension specified). 
-                # Not needed anymore, since copying is handled in app.py.
-                #cp_command_str = f'cp {filename_str} {self.user_downloads_dir}/{filename_str}'
-                #os.system(cp_command_str)
-                new_filename = f'{filename_str}.uncompressed'
-                command_string = f'gunzip -c {filename_str} > {new_filename}'
-                os.system(command_string)
-                #os.rename(filename_str, new_filename)
-                time.sleep(1)
-
-            if 'V0' in filename_str:
-                # Keep existing logic for .V06 and .V08 files
-                uncompressed_filestr = f'{filename_str}.uncompressed'
-                command_str = f'python {self.debz_filepath} {filename_str} {uncompressed_filestr}'
-                os.system(command_str)
-                #zip_command_str = f'gzip {uncompressed_filestr} -c > {self.user_downloads_dir}/{filename_str}.gz'
-                #os.system(zip_command_str)
-            else:
-                print(f'File type not recognized: {filename_str}')
-                continue
-        print("uncompress complete!")
+        filename_str = str(original_file)
+        print(f'Uncompressing {filename_str}')
+        if original_file.suffix == '.gz':
+            filename_str = filename_str[:-3]
+            new_filename = f'{filename_str}.uncompressed'
+            command_string = f'gunzip -c {filename_str} > {new_filename}'
+            os.system(command_string)
+            time.sleep(1)
+        if 'V0' in filename_str:
+            # Keep existing logic for .V06 and .V08 files
+            uncompressed_filestr = f'{filename_str}.uncompressed'
+            command_str = f'python {self.debz_filepath} {filename_str} {uncompressed_filestr}'
+            os.system(command_str)
+        else:
+            print(f'File type not recognized: {filename_str}')
+    
+    def uncompress_files_parallel(self):
+        # Use a Pool to process the files in parallel
+        with Pool(2) as pool:
+            pool.map(self.uncompress_file, self.source_files)
+        print("Uncompression complete!")
 
 
 
@@ -171,15 +162,32 @@ class Munger():
         return
 
 
-    def munge_files(self) -> None:
+    def munge_file(self, uncompressed_file) -> None:
         """
         Sets reference time to two hours before current time
         munges radar files to start at the reference time
         also changes RDA location
         """
-        fout = open(f'{self.assets_dir}/file_times.txt', 'a', encoding='utf-8')
         os.chdir(self.source_directory)
-        self.source_files = list(self.source_directory.glob('*uncompressed'))
+        file_datetime_str = str(uncompressed_file.parts[-1])
+        orig_file_timestr = file_datetime_str[4:19]
+        file_datetime_obj = datetime.strptime(orig_file_timestr, '%Y%m%d_%H%M%S').replace(tzinfo=pytz.UTC)
+        new_time_obj = file_datetime_obj + timedelta(seconds=self.seconds_shift)
+        new_time_str = datetime.strftime(new_time_obj, '%Y/%m/%d %H:%M:%S')
+        new_filename_date_string = datetime.strftime(new_time_obj, '%Y%m%d_%H%M%S')
+        command_line = f'./l2munger {self.new_rda} {new_time_str} 1 {file_datetime_str}'
+        os.system(command_line)
+        new_filename = f'{self.new_rda}{new_filename_date_string}'
+        with open(new_filename, 'rb') as f_in:
+            with gzip.open(f'{self.this_radar_polling_dir}/{new_filename}.gz', 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+
+    def munge_files_parallel(self):
+        """
+        Munges all the radar files in parallel.
+        """
+        # Generate the file_times.txt file serially 
+        fout = open(f'{self.assets_dir}/file_times.txt', 'a', encoding='utf-8')
         for uncompressed_file in self.uncompressed_files:
             file_datetime_str = str(uncompressed_file.parts[-1])
             orig_file_timestr = file_datetime_str[4:19]
@@ -187,16 +195,12 @@ class Munger():
             file_list_str = datetime.strftime(file_datetime_obj, '%Y/%m/%d %H:%M:%S')
             new_time_obj = file_datetime_obj + timedelta(seconds=self.seconds_shift)
             new_time_str = datetime.strftime(new_time_obj, '%Y/%m/%d %H:%M:%S')
-            new_filename_date_string = datetime.strftime(new_time_obj, '%Y%m%d_%H%M%S')
             fout.write(f'{file_datetime_str[0:4]} {file_list_str} --- {new_time_str}\n')
-            command_line = f'./l2munger {self.new_rda} {new_time_str} 1 {file_datetime_str}'
-            print(command_line)
-            os.system(command_line)
-            new_filename = f'{self.new_rda}{new_filename_date_string}'
-            with open(new_filename, 'rb') as f_in:
-                with gzip.open(f'{self.this_radar_polling_dir}/{new_filename}.gz', 'wb') as f_out:
-                    shutil.copyfileobj(f_in, f_out)
         fout.close()
+
+        with Pool(2) as pool:
+            pool.map(self.munge_file, self.uncompressed_files)
+        print("Munging complete!")
 
     # def make_radar_files_downloadable(self) -> None:
     #     """
