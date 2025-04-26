@@ -555,17 +555,19 @@ def generate_layout(layout_has_initialized, children, configs):
 
         new_items = dbc.Container([
             dcc.Interval(id='playback_timer', disabled=True, interval=15*1000),
-            # dcc.Store(id='tradar'),
             dcc.Store(id='dummy'),
             dcc.Store(id='playback_running_store', data=False),
-            dcc.Store(id='playback_start_store'),   # might be unused
-            dcc.Store(id='playback_end_store'),     # might be unused
-            dcc.Store(id='playback_clock_store'),   # might be unused
 
             dcc.Store(id='radar_info', data=radar_info),
             dcc.Store(id='sim_times'),
             dcc.Store(id='playback_speed_store', data=playback_speed),
             dcc.Store(id='playback_specs'),
+
+            # For processing callbacks 
+            dcc.Store(id='scripts_running', data=False),
+            dcc.Store(id='radar_download_status', data=False),
+            dcc.Store(id="remungering_state", data={"index": 0, "radars": []}),
+            dcc.Interval(id="remungering_interval", interval=1000, disabled=True),
 
             # For app/script monitoring
             dcc.Interval(id='directory_monitor', interval=2000),
@@ -733,7 +735,7 @@ def transpose_radar(value, radar_quantity, radar_info):
     return radar_info
 
 ################################################################################################
-# ----------------------------- Run Scripts button  --------------------------------------------
+# ----------------------------- Processing Scripts  --------------------------------------------
 ################################################################################################
 
 
@@ -984,32 +986,83 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
 
 
 @app.callback(
-    Output('show_script_progress', 'children', allow_duplicate=True),
+    Output('scripts_running', 'data', allow_duplicate=True),
+    Output('radar_download_status', 'data', allow_duplicate=True),
+    Input('radar_download_status', 'data'),  
+    State('radar_info', 'data'),
+    State('configs', 'data'),
+    State('sim_times', 'data'), 
+    prevent_initial_call=True,
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
+def query_and_download_radars(status, radar_info, configs, sim_times):
+    if not status:
+        raise PreventUpdate
+    
+    scripts_running = True 
+    radar_list = radar_info.get('radar_list', [])
+    session_id = configs['SESSION_ID']
+
+    # Query all radar files
+    try:
+        res = call_function(query_radar_files, configs, radar_info, sim_times)
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            logging.warning("Query radar files was cancelled.")
+            return False, scripts_running
+    except Exception as e:
+        logging.exception("Radar file query failed.")
+        return False, scripts_running
+
+    # Download all radar files
+    for radar in radar_list:
+        radar = radar.upper()
+        logging.info(f"Downloading radar: {radar}")
+        args = [radar, str(sim_times['event_start_str']),
+                str(sim_times['event_duration']), str(True), configs['RADAR_DIR']]
+        try:
+            res = call_function(utils.exec_script, Path(configs['NEXRAD_SCRIPT_PATH']), args, session_id)
+            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+                logging.warning(f"Radar download for {radar} was cancelled.")
+                return False, scripts_running
+        except Exception as e:
+            logging.exception(f"Radar download failed for {radar}")
+            return False, scripts_running
+
+    logging.info(f"Downloads completed for radars: {radar_list}")
+    return False, False
+
+
+@app.callback(
+    Output('radar_download_status', 'data'),
+    #Output('show_script_progress', 'children', allow_duplicate=True),
     #Output('sim_times', 'data', allow_duplicate=True),
     Input('sim_times', 'data'),
     State('configs', 'data'),
     State('radar_info', 'data'),
     prevent_initial_call=True,
     running=[
-        (Output('start_year', 'disabled'), True, False),
-        (Output('start_month', 'disabled'), True, False),
-        (Output('start_day', 'disabled'), True, False),
-        (Output('start_hour', 'disabled'), True, False),
-        (Output('start_minute', 'disabled'), True, False),
-        (Output('duration', 'disabled'), True, False),
         (Output('radar_quantity', 'disabled'), True, False),
         (Output('map_btn', 'disabled'), True, False),
         (Output('new_radar_selection', 'disabled'), True, False),
         (Output('run_scripts_btn', 'disabled'), True, False),
-        # (Output('playback_clock_store', 'disabled'), True, False),
-        (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
-        (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
         (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
         (Output('refresh_polling_btn', 'disabled'), True, False),
-        (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
-        # wait to enable change time dropdown
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
     ])
 def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     """
@@ -1024,6 +1077,7 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         raise PreventUpdate
     
     button_source = sim_times.get('source')
+    scripts_running = True 
 
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
@@ -1037,17 +1091,23 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
             # except (smtplib.SMTPException, ConnectionError) as e:
             #     print(f"Failed to send email: {e}")
         remove_files_and_dirs(configs)
-        run_with_cancel_button(configs, sim_times, radar_info)
+        # Radar processing
+        radar_download = True
+        return scripts_running, radar_download
+        #run_with_cancel_button(configs, sim_times, radar_info)
 
     # Run the refresh polling scripts
     elif button_source == 'refresh_polling_btn':
-        run_refresh_polling_scripts(sim_times, configs, radar_info)
+        radar_download = False
+        return scripts_running, radar_download
+    #    run_refresh_polling_scripts(sim_times, configs, radar_info)
     
-    else:
-        logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
-        raise PreventUpdate
+    #else:
+    #    logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
+    #    raise PreventUpdate
 
-    return no_update
+    return False, None
+    
 
 @app.callback(
     Output('sim_times', 'data'),
