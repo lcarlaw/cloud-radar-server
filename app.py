@@ -985,7 +985,6 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
 
 @app.callback(
     Output('show_script_progress', 'children', allow_duplicate=True),
-    #Output('sim_times', 'data', allow_duplicate=True),
     Input('sim_times', 'data'),
     State('configs', 'data'),
     State('radar_info', 'data'),
@@ -1010,7 +1009,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('change_time', 'disabled'), True, False),
         (Output('cancel_scripts', 'disabled'), False, True),
     ])
-def launch_simulation(sim_times, configs, radar_info):
+def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
     turn happens after Run Scripts is clicked.  
@@ -1034,7 +1033,7 @@ def launch_simulation(sim_times, configs, radar_info):
 
     # Run the refresh polling scripts
     elif sim_times.get('source') == 'refresh_polling_btn':
-        run_refresh_scripts(sim_times, configs, radar_info)
+        run_refresh_polling_scripts(sim_times, configs, radar_info)
     
     else:
         logging.warning(f"Unrecognized source in sim_times: {sim_times.get('source')}")
@@ -1056,7 +1055,7 @@ def launch_simulation(sim_times, configs, radar_info):
     prevent_initial_call=True,
 )
 def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy, hr, mn,
-                    dur, current_sim_times):
+                     dur, current_sim_times):
     """
     Update the sim_times dictionary and send to dcc.Store object when either the
     Run Scripts button or the Refresh Polling button is clicked. This logic
@@ -1540,9 +1539,9 @@ def update_day_dropdown(selected_year, selected_month):
 # based on the current real world time. It will rerun l2munger, shift_placefiles, and will 
 # regenerate dir.list, event_times, file_times, and hodographs. 
 
-# The following is called farther above by the launch_simulation callback if the refresh button
-# is clicked.
-def run_refresh_scripts(sim_times, cfg, radar_info): 
+# The following is called farther above by the coordinate_preprocessing_and_refresh callback 
+# if the refresh button is clicked.
+def run_refresh_polling_scripts(sim_times, cfg, radar_info): 
     # Remove the original file_times.txt file. This will get re-created by munger.py
     try:
         os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
