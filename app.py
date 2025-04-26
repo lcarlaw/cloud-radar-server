@@ -1039,27 +1039,54 @@ def launch_simulation(sim_times, configs, radar_info):
 @app.callback(
     Output('sim_times', 'data', allow_duplicate=True),
      [Input('run_scripts_btn', 'n_clicks'),
+      Input('refresh_polling_btn', 'n_clicks'),
      State('start_year', 'value'),
      State('start_month', 'value'),
      State('start_day', 'value'),
      State('start_hour', 'value'),
      State('start_minute', 'value'),
-     State('duration', 'value')],
+     State('duration', 'value'),
+     State('sim_times', 'data')],  # Get the current sim_times (needed for refresh_polling)
     prevent_initial_call=True,
 )
-def update_sim_times(n_clicks, yr, mo, dy, hr, mn, dur):
+def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy, hr, mn,
+                    dur, current_sim_times):
     """
-    Update the sim_times dictionary and send to dcc.Store object when user clicks the
-    Run Scripts button. This was broken out of the launch_simulation callback to ensure
-    sim_times is immediately updated.
+    Update the sim_times dictionary and send to dcc.Store object when either the
+    Run Scripts button or the Refresh Polling button is clicked. This logic
+    ensures sim_times is updated appropriately based on the button clicked.
     """
-    if not n_clicks:
+    # If neither button was clicked, prevent callback execution
+    if not n_clicks_run_scripts and not n_clicks_refresh_polling:
         raise PreventUpdate
 
     # Update the simulation times. 
     dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
-    sim_times = make_simulation_times(dt, dur)
-    return sim_times
+    updated_sim_times = make_simulation_times(dt, dur)
+
+    # If the Refresh Polling button was clicked, we need to use the event_start_str, 
+    # instead of looking at what's in the time dropdowns.
+    if n_clicks_refresh_polling > 0 and current_sim_times:
+        logging.info("Refresh Polling Button clicked, recalculating simulation times")
+        # For the Refresh Polling Button, the updated sim_times uses the current 
+        # start time and duration
+        dt = datetime.strptime(
+            current_sim_times['event_start_str'], "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=timezone.utc)
+        updated_sim_times = make_simulation_times(
+            dt, current_sim_times['event_duration']
+        )
+        logging.info(
+            f"Updated sim times: {updated_sim_times['playback_start_str']} "
+            f"{updated_sim_times['playback_end_str']}"
+        )
+
+    # Log and return the updated sim_times dictionary
+    logging.info(
+        f"Updated sim times: {updated_sim_times['playback_start_str']} "
+        f"{updated_sim_times['playback_end_str']}"
+    )
+    return updated_sim_times
 
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
@@ -1514,7 +1541,7 @@ def update_day_dropdown(selected_year, selected_month):
 # based on the current real world time. It will rerun l2munger, shift_placefiles, and will 
 # regenerate dir.list, event_times, file_times, and hodographs. 
 @app.callback(
-    Output('sim_times', 'data', allow_duplicate=True),
+    #Output('sim_times', 'data', allow_duplicate=True),
     Output('playback_btn', 'children', allow_duplicate=True),
     Output('playback_btn', 'disabled', allow_duplicate=True),
     Output('pause_resume_playback_btn', 'children', allow_duplicate=True),
@@ -1547,9 +1574,7 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     logging.info(f"Re-syncing polling times to current time")
     logging.info(f"Original sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
     
-    # Re-compute the simulation times and update the dictionary
-    dt = datetime.strptime(sim_times['event_start_str'], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-    sim_times = make_simulation_times(dt, sim_times['event_duration'])
+    # sim_times updated in function update_sim_times by button-click.
     logging.info(f"Updated sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
 
     # Remove the original file_times.txt file. This will get re-created by munger.py
@@ -1658,7 +1683,7 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     logging.info("Entering function run_transpose_script")
     run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
 
-    return sim_times, 'Launch Simulation', False, 'Pause Playback', True
+    return 'Launch Simulation', False, 'Pause Playback', True
 
 ################################################################################################
 # ----------------------------- Upload callback  -----------------------------------------------
