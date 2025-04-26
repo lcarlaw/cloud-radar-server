@@ -804,29 +804,6 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
 
 
-    if len(radar_info['radar_list']) > 0:
-            # this gives the user some radar data to poll while other scripts are running
-            try:
-                UpdateDirList(new_radar, 'None', cfg['POLLING_DIR'], initialize=True)
-            except (IOError, ValueError, KeyError) as e:
-                print(f"Error with UpdateDirList: {e}")
-                logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
-
-    # Delete the uncompressed/munged radar files from the data directory
-    try:
-        remove_munged_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-
-
-    # Now that all radar files are in assets/{}/downloads dir, zip them up
-    try:
-        zip_downloadable_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error zipping radar files ", exc_info=True)
-
-
-
     # Now that all original placefiles should be available, zip them up
     try:
         zip_original_placefiles(cfg)
@@ -886,16 +863,16 @@ def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_ti
     if not start:
         raise PreventUpdate
     
+    try:
+        create_radar_dict(radar_info)
+        copy_grlevel2_cfg_file(configs)
+    except (IOError, ValueError, KeyError) as e:
+        logging.exception("Error creating radar dict or cfg file: %s",e,exc_info=True)
+        
+    radar_list = radar_info.get('radar_list', [])
+    session_id = configs['SESSION_ID']
+    
     if scripts_to_run['query_and_download_radar']:
-        try:
-            create_radar_dict(radar_info)
-            copy_grlevel2_cfg_file(configs)
-        except (IOError, ValueError, KeyError) as e:
-            logging.exception("Error creating radar dict or cfg file: %s",e,exc_info=True)
-            
-        radar_list = radar_info.get('radar_list', [])
-        session_id = configs['SESSION_ID']
-
         # Write the links html page. 
         try:
             args = [configs['LINK_BASE'], configs['LINKS_HTML_PAGE']]
@@ -991,6 +968,26 @@ def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_tim
             if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
                 logging.warning(f"Munging for {radar} was cancelled.")
                 return False
+            
+            # this gives the user some radar data to poll while other scripts are running
+            try:
+                UpdateDirList(new_radar, 'None', configs['POLLING_DIR'], initialize=True)
+            except (IOError, ValueError, KeyError) as e:
+                print(f"Error with UpdateDirList: {e}")
+                logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
+            
+        # Delete the uncompressed/munged radar files from the data directory
+        try:
+            remove_munged_radar_files(configs)
+        except KeyError as e:
+            logging.exception("Error removing munged radar files ", exc_info=True)
+
+        # Now that all radar files are in assets/{}/downloads dir, zip them up
+        try:
+            zip_downloadable_radar_files(configs)
+        except KeyError as e:
+            logging.exception("Error zipping radar files ", exc_info=True)
+
     else: 
         logging.info("Skipping radar mungering step.")
 
@@ -1228,8 +1225,6 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
             # except (smtplib.SMTPException, ConnectionError) as e:
             #     print(f"Failed to send email: {e}")
         remove_files_and_dirs(configs)
-
-
         scripts_to_run = {
             'query_and_download_radar': True,
             'munger_radar': True,
@@ -1239,26 +1234,63 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         }
         # This sets off the chain of processing scripts
         return trigger_query_and_download_radar, scripts_to_run
-    
-
-        # Radar processing
-        #radar_download = True
-        #return scripts_running, radar_download
-        #run_with_cancel_button(configs, sim_times, radar_info)
 
     # Run the refresh polling scripts
-    #elif button_source == 'refresh_polling_btn':
-    #    radar_download = False
-    #    return scripts_running, radar_download
-    #    run_refresh_polling_scripts(sim_times, configs, radar_info)
+    elif button_source == 'refresh_polling_btn':
+        scripts_to_run = {
+            'query_and_download_radar': False,
+            'munger_radar': True,
+            'placefiles': False,
+            'nse_placefiles': False,
+            'hodographs': True
+        }
+        refresh_polling_prep(configs, radar_info)
+        # This sets off the chain of processing scripts
+        return trigger_query_and_download_radar, scripts_to_run
     
-    #else:
-    #    logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
-    #    raise PreventUpdate
+    else:
+        logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
+        raise PreventUpdate
 
-    return 'None'
+def refresh_polling_prep(cfg, radar_info):
+    """
+    Initial directory cleanup. 
+    """
+    # Remove the original file_times.txt file. This will get re-created by munger.py
+    try:
+        os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
+    except FileNotFoundError:
+        pass
+
+    # Delete the uncompressed/munged radar files from the data directory. Needed if a user
+    # canceled a previous refresh before mungering finishes, leaving orphaned .uncompressed
+    # files in the radar data directory.
+    try:
+        remove_munged_radar_files(cfg)
+    except KeyError as e:
+        logging.exception("Error removing munged radar files ", exc_info=True)
+
+    # --------- Munger ---------------------------------------------------------
+    # This for loop removes the now-stale munged radar files. We do this in a 
+    # first loop  to delete all of the files at once. Otherwise, the monitor bar 
+    # will bounce back-and-forth if the case has more than one radar.
+    if len(radar_info['radar_list']) > 0:
+        for _r, radar in enumerate(radar_info['radar_list']):
+            radar = radar.upper()
+            try:
+                if radar_info['new_radar'] == 'None':
+                    new_radar = radar
+                else:
+                    new_radar = radar_info['new_radar'].upper()
+            except (IOError, ValueError, KeyError) as e:
+                logging.exception("Error defining new radar: %s",e,exc_info=True)
+
+            old_files = glob(f"{cfg['POLLING_DIR']}/{new_radar}/*.gz")
+            for f in old_files:
+                logging.info(f"Deleting {f}")
+                os.remove(f)
     
-
+    
 @app.callback(
     Output('sim_times', 'data'),
      [Input('run_scripts_btn', 'n_clicks'),
@@ -1491,17 +1523,6 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
     Enables/disables interval component that elapses the playback time. User can only 
     click this button this once.
     """
-    # Report out the size of the dir.list files in the polling directory. This is done
-    # first just in case no radar directories are found (shouldn't happen, but just in case), 
-    # which would result in FileNotFoundErrors in UpdateDirList() calls.
-    dir_list_sizes = check_dirlist_sizes(cfg['POLLING_DIR'])
-    log_string = (
-        f"\n"
-        f"*************************Playback Launched**************************\n"
-        f"Session ID: {cfg['SESSION_ID']}\n"
-        f"dir.list sizes (in bytes): {dir_list_sizes}\n"
-    )
-    logging.info(log_string)
 
     playback_specs = {
         'playback_paused': False,
@@ -1541,8 +1562,15 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         refresh_polling_btn_disabled = True
         run_scripts_btn_disabled = True
 
+    # Report out the size of the dir.list files in the polling directory. This is done
+    # first just in case no radar directories are found (shouldn't happen, but just in case), 
+    # which would result in FileNotFoundErrors in UpdateDirList() calls.
+    dir_list_sizes = check_dirlist_sizes(cfg['POLLING_DIR'])
     log_string = (
         f"\n"
+        f"*************************Playback Launched**************************\n"
+        f"Session ID: {cfg['SESSION_ID']}\n"
+        f"dir.list sizes (in bytes): {dir_list_sizes}\n"
         f"Start: {sim_times['playback_start_str']}, End: {sim_times['playback_end_str']}\n"
         f"Start dt: {sim_times['playback_start']}, End dt: {sim_times['playback_end']}\n"
         f"Launch Simulation Button Disabled?: {btn_disabled}\n"
