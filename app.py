@@ -995,10 +995,11 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
 def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
-    turn happens after Run Scripts is clicked.  
+    turn happens after either the run scripts or refresh polling buttons are clicked.  
 
     Function handles the processing of necessary scripts to simulate radar operations, 
-    create hodographs, and transpose placefiles.
+    create hodographs, and transpose placefiles, and importantly, coordinates which 
+    processing scripts are run based on the button clicked.
     """
     if not sim_times:
         raise PreventUpdate
@@ -1025,7 +1026,7 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
             return_status = run_refresh_polling_scripts(sim_times, configs, radar_info)
         
         else:
-            logging.warning(f"Unrecognized source in sim_times: {sim_times.get('source')}")
+            logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
             raise PreventUpdate
         
         # Return status will be 0 if all scripts executed successfully, and None if user
@@ -1038,6 +1039,7 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         logging.error(f"Script error: {e}")
         status = 'error'
     
+    logging.info(f"Scripts for {configs['SESSION_ID']} completed with status: {status}")
     return status
 
 @app.callback(
