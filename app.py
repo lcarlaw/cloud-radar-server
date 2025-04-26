@@ -558,9 +558,9 @@ def generate_layout(layout_has_initialized, children, configs):
             # dcc.Store(id='tradar'),
             dcc.Store(id='dummy'),
             dcc.Store(id='playback_running_store', data=False),
-            dcc.Store(id='playback_start_store'),   # might be unused
-            dcc.Store(id='playback_end_store'),     # might be unused
-            dcc.Store(id='playback_clock_store'),   # might be unused
+            #dcc.Store(id='playback_start_store'),   # might be unused
+            #dcc.Store(id='playback_end_store'),     # might be unused
+            #dcc.Store(id='playback_clock_store'),   # might be unused
 
             dcc.Store(id='radar_info', data=radar_info),
             dcc.Store(id='sim_times'),
@@ -570,7 +570,7 @@ def generate_layout(layout_has_initialized, children, configs):
             # For app/script monitoring
             dcc.Interval(id='directory_monitor', interval=2000),
             dcc.Store(id='monitor_store', data=monitor_store),
-
+            dcc.Store(id='script_status', data='idle'),
             lc.top_section, lc.top_banner,
             dbc.Container([
                 dbc.Container([
@@ -982,33 +982,16 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
             print("Error updating hodo html: ", e)
             logging.exception("Error updating hodo html: %s",e, exc_info=True)
 
+    return 0
 
 @app.callback(
-    Output('show_script_progress', 'children', allow_duplicate=True),
+    #Output('show_script_progress', 'children', allow_duplicate=True),
+    Output('script_status', 'data', allow_duplicate=True),
     Input('sim_times', 'data'),
     State('configs', 'data'),
     State('radar_info', 'data'),
     prevent_initial_call=True,
-    running=[
-        (Output('start_year', 'disabled'), True, False),
-        (Output('start_month', 'disabled'), True, False),
-        (Output('start_day', 'disabled'), True, False),
-        (Output('start_hour', 'disabled'), True, False),
-        (Output('start_minute', 'disabled'), True, False),
-        (Output('duration', 'disabled'), True, False),
-        (Output('radar_quantity', 'disabled'), True, False),
-        (Output('map_btn', 'disabled'), True, False),
-        (Output('new_radar_selection', 'disabled'), True, False),
-        (Output('run_scripts_btn', 'disabled'), True, False),
-        (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
-        (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
-        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
-        (Output('refresh_polling_btn', 'disabled'), True, False),
-        (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
-        # wait to enable change time dropdown
-        (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
-    ])
+)
 def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
@@ -1017,32 +1000,49 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     Function handles the processing of necessary scripts to simulate radar operations, 
     create hodographs, and transpose placefiles.
     """
-    # Run the regular pre-processing scripts
-    if sim_times.get('source') == 'run_scripts_btn':
-        #if config.PLATFORM != 'WINDOWS':
-            # try:
-            #     send_email(
-            #         subject="RSSiC simulation launched",
-            #         body="RSSiC simulation launched",
-            #         to_email="thomas.turnage@noaa.gov"
-            #     )
-            # except (smtplib.SMTPException, ConnectionError) as e:
-            #     print(f"Failed to send email: {e}")
-        remove_files_and_dirs(configs)
-        run_with_cancel_button(configs, sim_times, radar_info)
-
-    # Run the refresh polling scripts
-    elif sim_times.get('source') == 'refresh_polling_btn':
-        run_refresh_polling_scripts(sim_times, configs, radar_info)
-    
-    else:
-        logging.warning(f"Unrecognized source in sim_times: {sim_times.get('source')}")
+    if not sim_times:
         raise PreventUpdate
     
-    return no_update
+    button_source = sim_times.get('source')
+
+    try: 
+        # Run the regular pre-processing scripts
+        if button_source == 'run_scripts_btn':
+            #if config.PLATFORM != 'WINDOWS':
+                # try:
+                #     send_email(
+                #         subject="RSSiC simulation launched",
+                #         body="RSSiC simulation launched",
+                #         to_email="thomas.turnage@noaa.gov"
+                #     )
+                # except (smtplib.SMTPException, ConnectionError) as e:
+                #     print(f"Failed to send email: {e}")
+            remove_files_and_dirs(configs)
+            return_status = run_with_cancel_button(configs, sim_times, radar_info)
+
+        # Run the refresh polling scripts
+        elif button_source == 'refresh_polling_btn':
+            return_status = run_refresh_polling_scripts(sim_times, configs, radar_info)
+        
+        else:
+            logging.warning(f"Unrecognized source in sim_times: {sim_times.get('source')}")
+            raise PreventUpdate
+        
+        # Return status will be 0 if all scripts executed successfully, and None if user
+        # cancelled early. 
+        status = 'done'
+        if return_status != 0:
+            status = 'cancelled'
+
+    except Exception as e:
+        logging.error(f"Script error: {e}")
+        status = 'error'
+    
+    return status
 
 @app.callback(
     Output('sim_times', 'data'),
+    Output('script_status', 'data', allow_duplicate=True),
      [Input('run_scripts_btn', 'n_clicks'),
       Input('refresh_polling_btn', 'n_clicks'),
      State('start_year', 'value'),
@@ -1073,7 +1073,7 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
         raise PreventUpdate
 
     sim_times['source'] = triggered 
-    
+    script_status = 'running'
     log_string = (
         f"\n"
         f"==========================Simulation Times==========================\n"
@@ -1084,7 +1084,47 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
         f"====================================================================\n"
     )
     logging.info(log_string)
-    return sim_times
+    return sim_times, script_status
+
+
+@app.callback(
+    # Simulation button controls
+    Output('run_scripts_btn', 'disabled', allow_duplicate=True),
+    Output('cancel_scripts', 'disabled', allow_duplicate=True),
+    Output('playback_btn', 'disabled', allow_duplicate=True),
+    Output('playback_btn', 'children', allow_duplicate=True),
+    Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),
+    Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
+    # Time and radar selections
+    Output('radar_quantity', 'disabled', allow_duplicate=True),
+    Output('new_radar_selection', 'disabled', allow_duplicate=True),
+    Output('map_btn', 'disabled', allow_duplicate=True),
+    Output('confirm_radars_btn', 'disabled', allow_duplicate=True),
+    Output('duration', 'disabled', allow_duplicate=True),
+    Output('start_year', 'disabled', allow_duplicate=True),
+    Output('start_month', 'disabled', allow_duplicate=True),
+    Output('start_day', 'disabled', allow_duplicate=True),
+    Output('start_hour', 'disabled', allow_duplicate=True),
+    Output('start_minute', 'disabled', allow_duplicate=True),
+    Input('script_status', 'data'),
+    prevent_initial_call=True
+)
+def update_button_states(status):
+    """
+    This callback updates the button states based on the status of the processing
+    scripts. Handles what running=[] failed to accomplish due to long-running 
+    callbacks. 
+    """
+    launch = 'Launch Simulation'
+    trues = [True]*10
+    falses = [False]*10
+    if status == 'running':
+        button_disabled_states = [True,False,True,launch,True,True]+trues 
+    elif status in ['done', 'error', 'idle']:
+        button_disabled_states = [False,True,False,launch,True,False]+falses
+    elif status == 'cancelled':
+        button_disabled_states = [False,True,True,launch,True,True]+falses
+    return button_disabled_states
 
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
@@ -1648,6 +1688,7 @@ def run_refresh_polling_scripts(sim_times, cfg, radar_info):
     logging.info("Entering function run_transpose_script")
     run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
 
+    return 0
 
 ################################################################################################
 # ----------------------------- Upload callback  -----------------------------------------------
