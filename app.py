@@ -924,7 +924,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
                         cfg['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
-
+    '''
     # --------- NSE placefiles ------------------------------------------------------
     args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
             cfg['SCRIPTS_DIR'], cfg['DATA_DIR'], cfg['PLACEFILES_DIR']]
@@ -932,7 +932,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
                         cfg['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
-
+    '''
     # Now that all original placefiles should be available, zip them up
     try:
         zip_original_placefiles(cfg)
@@ -1019,9 +1019,10 @@ def launch_simulation(sim_times, configs, radar_info):
     Function handles the processing of necessary scripts to simulate radar operations, 
     create hodographs, and transpose placefiles.
     """
-    if not sim_times:
+    # Do not run the processing scripts if the refresh button was clicked. 
+    if not sim_times or sim_times.get('source') != 'run_scripts_btn':
         raise PreventUpdate
-
+    
     if config.PLATFORM != 'WINDOWS':
         # try:
         #     send_email(
@@ -1037,7 +1038,7 @@ def launch_simulation(sim_times, configs, radar_info):
     return no_update
 
 @app.callback(
-    Output('sim_times', 'data', allow_duplicate=True),
+    Output('sim_times', 'data'),
      [Input('run_scripts_btn', 'n_clicks'),
       Input('refresh_polling_btn', 'n_clicks'),
      State('start_year', 'value'),
@@ -1054,39 +1055,32 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     """
     Update the sim_times dictionary and send to dcc.Store object when either the
     Run Scripts button or the Refresh Polling button is clicked. This logic
-    ensures sim_times is updated appropriately based on the button clicked.
+    ensures sim_times is updated immediately after either button is clicked.
     """
-    # If neither button was clicked, prevent callback execution
-    if not n_clicks_run_scripts and not n_clicks_refresh_polling:
+    triggered = ctx.triggered_id
+    if triggered == 'run_scripts_btn':
+        dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
+        sim_times = make_simulation_times(dt, dur)
+    elif triggered == 'refresh_polling_btn' and current_sim_times:
+        dt = datetime.strptime(current_sim_times['event_start_str'], "%Y-%m-%d %H:%M")
+        dt = dt.replace(tzinfo=timezone.utc)
+        sim_times = make_simulation_times(dt, current_sim_times['event_duration'])
+    else:
         raise PreventUpdate
 
-    # Update the simulation times. 
-    dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
-    updated_sim_times = make_simulation_times(dt, dur)
-
-    # If the Refresh Polling button was clicked, we need to use the event_start_str, 
-    # instead of looking at what's in the time dropdowns.
-    if n_clicks_refresh_polling > 0 and current_sim_times:
-        logging.info("Refresh Polling Button clicked, recalculating simulation times")
-        # For the Refresh Polling Button, the updated sim_times uses the current 
-        # start time and duration
-        dt = datetime.strptime(
-            current_sim_times['event_start_str'], "%Y-%m-%d %H:%M"
-        ).replace(tzinfo=timezone.utc)
-        updated_sim_times = make_simulation_times(
-            dt, current_sim_times['event_duration']
-        )
-        logging.info(
-            f"Updated sim times: {updated_sim_times['playback_start_str']} "
-            f"{updated_sim_times['playback_end_str']}"
-        )
-
-    # Log and return the updated sim_times dictionary
-    logging.info(
-        f"Updated sim times: {updated_sim_times['playback_start_str']} "
-        f"{updated_sim_times['playback_end_str']}"
+    sim_times['source'] = triggered 
+    
+    log_string = (
+        f"\n"
+        f"==========================Simulation Times==========================\n"
+        f"{triggered} Clicked\n"
+        f"Sim times: {sim_times['playback_start_str']} "
+        f"{sim_times['playback_end_str']}"
+        f"\n"
+        f"====================================================================\n"
     )
-    return updated_sim_times
+    logging.info(log_string)
+    return sim_times
 
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
@@ -1546,37 +1540,27 @@ def update_day_dropdown(selected_year, selected_month):
     Output('playback_btn', 'disabled', allow_duplicate=True),
     Output('pause_resume_playback_btn', 'children', allow_duplicate=True),
     Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),
-    [Input('refresh_polling_btn', 'n_clicks'),
+    #[Input('refresh_polling_btn', 'n_clicks'),
+    [Input('sim_times', 'data'),
      State('configs', 'data'),
-     State('sim_times', 'data'),
      State('radar_info', 'data')],
     prevent_initial_call=True,
-    running=[
-        (Output('start_year', 'disabled'), True, False),
-        (Output('start_month', 'disabled'), True, False),
-        (Output('start_day', 'disabled'), True, False),
-        (Output('start_hour', 'disabled'), True, False),
-        (Output('start_minute', 'disabled'), True, False),
-        (Output('duration', 'disabled'), True, False),
-        (Output('radar_quantity', 'disabled'), True, False),
-        (Output('map_btn', 'disabled'), True, False),
-        (Output('new_radar_selection', 'disabled'), True, False),
-        (Output('run_scripts_btn', 'disabled'), True, False),
-        (Output('confirm_radars_btn', 'disabled'), True, False),  
-        (Output('playback_btn', 'disabled'), True, False),  
-        (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
-        (Output('refresh_polling_btn', 'disabled'), True, False),
-        (Output('pause_resume_playback_btn', 'disabled'), True, True), # Force user to relaunch sim
-    ]
 )
-def refresh_polling(n_clicks, cfg, sim_times, radar_info):
+def refresh_polling(sim_times, cfg, radar_info): 
+    # Do not run if the run scripts button was clicked. 
+    if not sim_times or sim_times.get('source') != 'refresh_polling_btn':
+        raise PreventUpdate
+        
     logging.info(f"Re-syncing polling times to current time")
     logging.info(f"Original sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
     
     # sim_times updated in function update_sim_times by button-click.
     logging.info(f"Updated sim times: {sim_times['playback_start_str']} {sim_times['playback_end_str']}")
+    run_refresh_scripts(sim_times, cfg, radar_info)
+    return 'Launch Simulation', False, 'Pause Playback', True
 
+
+def run_refresh_scripts(sim_times, cfg, radar_info): 
     # Remove the original file_times.txt file. This will get re-created by munger.py
     try:
         os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
@@ -1683,7 +1667,6 @@ def refresh_polling(n_clicks, cfg, sim_times, radar_info):
     logging.info("Entering function run_transpose_script")
     run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
 
-    return 'Launch Simulation', False, 'Pause Playback', True
 
 ################################################################################################
 # ----------------------------- Upload callback  -----------------------------------------------
