@@ -924,7 +924,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
                         cfg['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
-    '''
+
     # --------- NSE placefiles ------------------------------------------------------
     args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
             cfg['SCRIPTS_DIR'], cfg['DATA_DIR'], cfg['PLACEFILES_DIR']]
@@ -932,7 +932,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
                         cfg['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         return
-    '''
+
     # Now that all original placefiles should be available, zip them up
     try:
         zip_original_placefiles(cfg)
