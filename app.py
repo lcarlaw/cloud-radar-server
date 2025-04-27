@@ -833,7 +833,19 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
     State('configs', 'data'),
     State('sim_times', 'data'), 
     prevent_initial_call=True,
-)
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_times):
     if not start:
         raise PreventUpdate
@@ -901,8 +913,7 @@ def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_ti
     else: 
         logging.info("Skipping radar download step.")
 
-    trigger_munger_radar = True
-    return trigger_munger_radar, radar_info, radar_list, status
+    return True, radar_info, radar_list, status
 
 # ----------------------------- Step 2: Munge radar files -----------------------------
 @app.callback(
@@ -916,7 +927,19 @@ def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_ti
     State('configs', 'data'),
     State('sim_times', 'data'), 
     prevent_initial_call=True,
-)
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_times):
     if not start: 
         raise PreventUpdate
@@ -942,7 +965,7 @@ def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_tim
                         args, configs['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         logging.warning(f"Munging for {radar} was cancelled.")
-        return False, 'cancelled'
+        return False, [], 'cancelled'
     
     # this gives the user some radar data to poll while other scripts are running
     try:
@@ -965,11 +988,24 @@ def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_tim
     State('configs', 'data'),
     State('sim_times', 'data'), 
     prevent_initial_call=True,
-)
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def munger_radar_2(start, scripts_to_run, radar_list, radar_info, configs, sim_times):
     if not start: 
         raise PreventUpdate
-
+    
+    remaining_radars = []
     if len(radar_list) > 0:
         radar = radar_list[0]
         remaining_radars = radar_list[1:]
@@ -992,7 +1028,7 @@ def munger_radar_2(start, scripts_to_run, radar_list, radar_info, configs, sim_t
                             args, configs['SESSION_ID'])
         if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
             logging.warning(f"Munging for {radar} was cancelled.")
-            return False, 'cancelled'
+            return False, [], 'cancelled'
     
         # this gives the user some radar data to poll while other scripts are running
         try:
@@ -1013,7 +1049,19 @@ def munger_radar_2(start, scripts_to_run, radar_list, radar_info, configs, sim_t
     State('configs', 'data'),
     State('sim_times', 'data'), 
     prevent_initial_call=True,
-)
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def munger_radar_3(start, scripts_to_run, radar_list, radar_info, configs, sim_times):
     if not start: 
         raise PreventUpdate
@@ -1141,23 +1189,24 @@ def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_tim
     State('configs', 'data'),
     State('sim_times', 'data'), 
     prevent_initial_call=True,
-)
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def generate_placefiles(start, scripts_to_run, radar_info, configs, sim_times):
     if not start: 
         raise PreventUpdate
 
     status = 'running'
-
-    # Always write an event times placefile, and events.txt and events.html output.
-    # --------- Event times placefiles ----------------------------------------------
-    args = [str(sim_times['simulation_seconds_shift']), configs['DATA_DIR'], 
-            configs['RADAR_DIR'], configs['EVENTS_HTML_PAGE'], 
-            configs['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(configs['EVENT_TIMES_SCRIPT_PATH']), 
-                        args, configs['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        logging.warning("Events placefile generation was cancelled.")
-        return False, 'cancelled'
     
     if scripts_to_run['placefiles']:
         # --------- LSRs ----------------------------------------------------------------
@@ -1200,13 +1249,23 @@ def generate_placefiles(start, scripts_to_run, radar_info, configs, sim_times):
     else: 
         logging.info("Skipping placefile generation step.")
 
+    # Always write an event times placefile, and events.txt and events.html output.
+    # --------- Event times placefiles ----------------------------------------------
+    args = [str(sim_times['simulation_seconds_shift']), configs['DATA_DIR'], 
+            configs['RADAR_DIR'], configs['EVENTS_HTML_PAGE'], 
+            configs['EVENTS_TEXT_FILE']]
+    res = call_function(utils.exec_script, Path(configs['EVENT_TIMES_SCRIPT_PATH']), 
+                        args, configs['SESSION_ID'])
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        logging.warning("Events placefile generation was cancelled.")
+        return False, 'cancelled'
+    
     # There always is a timeshift with a simulation, so this script needs to
     # execute every time, even if a user doesn't select a radar to transpose to.
     logging.info("Entering function run_transpose_script")
     run_transpose_script(configs['PLACEFILES_DIR'], sim_times, radar_info)
 
-    trigger_nse_placefiles = True
-    return trigger_nse_placefiles, status
+    return True, status
 
 # ------------------------------ Step 4: NSE placefiles- -----------------------------
 @app.callback(
@@ -1218,7 +1277,19 @@ def generate_placefiles(start, scripts_to_run, radar_info, configs, sim_times):
     State('sim_times', 'data'), 
     State('radar_info', 'data'),
     prevent_initial_call=True,
-)
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def generate_placefiles(start, scripts_to_run, configs, sim_times, radar_info):
     if not start: 
         raise PreventUpdate
@@ -1248,8 +1319,7 @@ def generate_placefiles(start, scripts_to_run, configs, sim_times, radar_info):
     except KeyError as e:
         logging.exception("Error zipping original placefiles ", exc_info=True)
 
-    trigger_hodographs = True
-    return trigger_hodographs, status
+    return True, status
 
 
 # ------------------------------ Step 5 Hodographs --------------------------------
@@ -1261,7 +1331,19 @@ def generate_placefiles(start, scripts_to_run, configs, sim_times, radar_info):
     State('configs', 'data'),
     State('sim_times', 'data'), 
     prevent_initial_call=True,
-)
+    running=[
+        (Output('radar_quantity', 'disabled'), True, False),
+        (Output('map_btn', 'disabled'), True, False),
+        (Output('new_radar_selection', 'disabled'), True, False),
+        (Output('run_scripts_btn', 'disabled'), True, False),
+        (Output('confirm_radars_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'disabled'), True, False),  
+        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
+        (Output('refresh_polling_btn', 'disabled'), True, False),
+        (Output('pause_resume_playback_btn', 'disabled'), True, True), 
+        (Output('change_time', 'disabled'), True, False),
+        (Output('cancel_scripts', 'disabled'), False, True),
+    ])
 def generate_hodographs(start, scripts_to_run, radar_info, configs, sim_times):
     if not start: 
         raise PreventUpdate
