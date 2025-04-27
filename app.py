@@ -258,7 +258,7 @@ def remove_files_and_dirs(cfg) -> None:
         pass
 
 
-def remove_munged_radar_files(cfg) -> None:
+def remove_munged_radar_files(cfg, copy_files=False) -> None:
     """
     Removes uncompressed and 'munged' radar files within the /data/xx/radar directory 
     after the pre-processing scripts have completed. These files are no longer needed 
@@ -279,7 +279,7 @@ def remove_munged_radar_files(cfg) -> None:
                 raw_matched = re.match(raw_pattern, name)
                 if matched or '.uncompressed' in name:
                     os.remove(thisfile)
-                if raw_matched:
+                if raw_matched and copy_files:
                     shutil.copy2(thisfile, cfg['USER_DOWNLOADS_DIR'])
 
 def zip_downloadable_radar_files(cfg) -> None:
@@ -844,7 +844,7 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_times):
     if not start:
@@ -938,7 +938,7 @@ def query_and_download_radars(start, scripts_to_run, radar_info, configs, sim_ti
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_times):
     if not start: 
@@ -999,7 +999,7 @@ def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_tim
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def munger_radar_2(start, scripts_to_run, radar_list, radar_info, configs, sim_times):
     if not start: 
@@ -1060,7 +1060,7 @@ def munger_radar_2(start, scripts_to_run, radar_list, radar_info, configs, sim_t
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def munger_radar_3(start, scripts_to_run, radar_list, radar_info, configs, sim_times):
     if not start: 
@@ -1099,7 +1099,7 @@ def munger_radar_3(start, scripts_to_run, radar_list, radar_info, configs, sim_t
     # We always want to do these last two items. 
     # Delete the uncompressed/munged radar files from the data directory
     try:
-        remove_munged_radar_files(configs)
+        remove_munged_radar_files(configs, copy_files=True)
     except KeyError as e:
         logging.exception("Error removing munged radar files ", exc_info=True)
 
@@ -1200,7 +1200,7 @@ def munger_radar(start, scripts_to_run, radar_list, radar_info, configs, sim_tim
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def generate_placefiles(start, scripts_to_run, radar_info, configs, sim_times):
     if not start: 
@@ -1288,7 +1288,7 @@ def generate_placefiles(start, scripts_to_run, radar_info, configs, sim_times):
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def generate_placefiles(start, scripts_to_run, configs, sim_times, radar_info):
     if not start: 
@@ -1342,7 +1342,7 @@ def generate_placefiles(start, scripts_to_run, configs, sim_times, radar_info):
         (Output('refresh_polling_btn', 'disabled'), True, False),
         (Output('pause_resume_playback_btn', 'disabled'), True, True), 
         (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, True),
+        (Output('cancel_scripts', 'disabled'), False, False),
     ])
 def generate_hodographs(start, scripts_to_run, radar_info, configs, sim_times):
     if not start: 
@@ -1364,7 +1364,7 @@ def generate_hodographs(start, scripts_to_run, radar_info, configs, sim_times):
                                 args, configs['SESSION_ID'])
             if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
                 logging.warning("Hodograph generation was cancelled.")
-                return False, 'cancelled'
+                return 'cancelled'
 
             try:
                 UpdateHodoHTML(
@@ -1428,7 +1428,8 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         
         # For future use: add user overrides to skip certain scripts
         #######
-        #scripts_to_run['nse_placefiles'] = False
+        scripts_to_run['placefiles'] = False
+        scripts_to_run['nse_placefiles'] = False
         #scripts_to_run['hodographs'] = False
         try:
             remove_files_and_dirs(configs)
@@ -1558,16 +1559,16 @@ def button_control(script_status):
     This function controls the state of the buttons on the page based on the status of the 
     processing scripts, stored in script_status. 
     """
-    trues = [True]*9
-    if script_status == 'running':
-        ret = trues + [False, 'Launch Simulation']
-    elif script_status == 'cancelled':
-        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
-    elif script_status == 'done':
-        ret = [False]*7 + [True, False, True, 'Launch Simulation'] 
-    else: 
-        ret = trues + [True, 'Launch Simulation']
-    return ret
+    #trues = [True]*9
+    #if script_status == 'running':
+    #    ret = trues + [False, 'Launch Simulation']
+    if script_status == 'cancelled':
+        return [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
+    #elif script_status == 'done':
+    #    ret = [False]*7 + [True, False, True, 'Launch Simulation'] 
+    #else: 
+    #    ret = trues + [True, 'Launch Simulation']
+    return no_update
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
 ################################################################################################
