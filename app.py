@@ -1428,8 +1428,8 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         
         # For future use: add user overrides to skip certain scripts
         #######
-        scripts_to_run['placefiles'] = False
-        scripts_to_run['nse_placefiles'] = False
+        #scripts_to_run['placefiles'] = False
+        #scripts_to_run['nse_placefiles'] = False
         #scripts_to_run['hodographs'] = False
         try:
             remove_files_and_dirs(configs)
