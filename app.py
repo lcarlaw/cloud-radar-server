@@ -474,6 +474,13 @@ def generate_layout(layout_has_initialized, children, configs):
             'radar_files_dict': radar_files_dict
         }
 
+        # Initialize the script status tracking file and purge completion file if 
+        # it exists 
+        write_status_file('startup', f"{configs['DATA_DIR']}/script_status.txt")
+        completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+        if completed_file.is_file():
+            completed_file.unlink()
+
         # Settings for date dropdowns moved here to avoid specifying different values in
         # the layout
         now = datetime.now(pytz.utc)
@@ -568,6 +575,8 @@ def generate_layout(layout_has_initialized, children, configs):
             dcc.Store(id='playback_specs'),
 
             # For app/script monitoring
+            dcc.Interval(id='script_status_interval', interval=50),
+            #dcc.Store(id='scripts_running', data=False),
             dcc.Interval(id='directory_monitor', interval=2000),
             dcc.Store(id='monitor_store', data=monitor_store),
 
@@ -982,35 +991,196 @@ def run_with_cancel_button(cfg, sim_times, radar_info):
             print("Error updating hodo html: ", e)
             logging.exception("Error updating hodo html: %s",e, exc_info=True)
 
+def write_status_file(value: str, filename: str):
+    """
+    For monitoring individual processing script status (can't rely on dcc.Store to
+    update if function runs for more than the timeout interval).
+    """
+    with open(filename, 'w') as f: f.write(str(value))
+
+def read_status_file(filename: str):
+    status = 'idle'
+    try:
+        with open(filename, 'r') as f: 
+            status = f.read().strip().lower()
+    except Exception as e: 
+        pass 
+    return status
+
+def query_and_download_radars(radar_info, configs, sim_times):
+    try:
+        create_radar_dict(radar_info)
+        copy_grlevel2_cfg_file(configs)
+    except (IOError, ValueError, KeyError) as e:
+        logging.exception("Error creating radar dict or cfg file: %s",e,exc_info=True)
+
+    radar_list = radar_info.get('radar_list', [])
+    session_id = configs['SESSION_ID']
+    
+    status = 'cancelled'
+    # Write the links html page. 
+    try:
+        args = [configs['LINK_BASE'], configs['LINKS_HTML_PAGE']]
+        res = call_function(utils.exec_script, Path(configs['LINKS_PAGE_SCRIPT_PATH']),
+                            args, session_id)
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+            return status
+    except Exception as e:
+        logging.exception("Error creating links.html page")
+        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+        return status
+
+    # Query all radar files
+    try:
+        res = call_function(query_radar_files, configs, radar_info, sim_times)
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            logging.warning("Query radar files was cancelled.")
+            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+            return status
+    except Exception as e:
+        logging.exception("Radar file query failed.")
+
+    # Download all radar files
+    for radar in radar_list:
+        radar = radar.upper()
+        logging.info(f"Downloading radar: {radar}")
+        args = [radar, str(sim_times['event_start_str']),
+                str(sim_times['event_duration']), str(True), configs['RADAR_DIR']]
+        try:
+            res = call_function(utils.exec_script, Path(configs['NEXRAD_SCRIPT_PATH']), 
+                                args, session_id)
+            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+                logging.warning(f"Radar download for {radar} was cancelled.")
+                write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+                return status
+        except Exception as e:
+            logging.exception(f"Radar download failed for {radar}")
+
+    logging.info(f"Downloads completed for radars: {radar_list}")
+    status = 'running'
+    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+    return status
+
+
+def munger_radar(radar_info, configs, sim_times):
+    status = 'cancelled'
+    radar_list = radar_info.get('radar_list', [])
+    for radar in radar_list:
+        radar = radar.upper()  
+        try:
+            if radar_info['new_radar'] == 'None':
+                new_radar = radar
+            else:
+                new_radar = radar_info['new_radar'].upper()
+        except (IOError, ValueError, KeyError) as e:
+            logging.exception("Error defining new radar: %s",e,exc_info=True)
+
+        args = [radar, str(sim_times['playback_start_str']), 
+                str(sim_times['event_duration']),
+                str(sim_times['simulation_seconds_shift']), configs['RADAR_DIR'],
+                configs['POLLING_DIR'], configs['USER_DOWNLOADS_DIR'], 
+                configs['L2MUNGER_FILEPATH'], configs['DEBZ_FILEPATH'],
+                new_radar]
+        res = call_function(utils.exec_script, Path(configs['MUNGER_SCRIPT_FILEPATH']),
+                            args, configs['SESSION_ID'])
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            logging.warning(f"Munging for {radar} was cancelled.")
+            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+            return status
+        
+        # this gives the user some radar data to poll while other scripts are running
+        try:
+            UpdateDirList(new_radar, 'None', configs['POLLING_DIR'], initialize=True)
+        except (IOError, ValueError, KeyError) as e:
+            print(f"Error with UpdateDirList: {e}")
+            logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
+        
+    # Delete the uncompressed/munged radar files from the data directory
+    try:
+        remove_munged_radar_files(configs)
+    except KeyError as e:
+        logging.exception("Error removing munged radar files ", exc_info=True)
+
+    # Now that all radar files are in assets/{}/downloads dir, zip them up
+    try:
+        zip_downloadable_radar_files(configs)
+    except KeyError as e:
+        logging.exception("Error zipping radar files ", exc_info=True)
+
+    status = 'running'
+    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+    return status
+
+@app.callback(
+    [Output('radar_quantity', 'disabled', allow_duplicate=True), 
+    Output('map_btn', 'disabled', allow_duplicate=True), 
+    Output('new_radar_selection', 'disabled', allow_duplicate=True),
+    Output('run_scripts_btn', 'disabled', allow_duplicate=True), 
+    Output('confirm_radars_btn', 'disabled', allow_duplicate=True), 
+    Output('playback_btn', 'disabled', allow_duplicate=True), 
+    Output('refresh_polling_btn', 'disabled', allow_duplicate=True), 
+    Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),  
+    Output('change_time', 'disabled', allow_duplicate=True), 
+    Output('cancel_scripts', 'disabled', allow_duplicate=True), 
+    Output('playback_btn', 'children', allow_duplicate=True)],
+    Input('script_status_interval', 'n_intervals'),
+    State('configs', 'data'),
+    prevent_initial_call=True
+)
+def button_control(_n, configs):
+    status_file = f"{configs['DATA_DIR']}/script_status.txt"
+    script_status = read_status_file(status_file)
+    trues = [True]*9
+    if script_status == 'running':
+        ret = trues + [False, 'Launch Simulation']
+    elif script_status in ['cancelled', 'startup']:
+        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
+    elif script_status == 'completed':
+        ret = [False]*7 + [True, False, True, 'Launch Simulation'] 
+    elif script_status == 'sim launched':
+        ret = no_update # Releases button control to the clock callbacks
+    else: 
+        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
+
+    # If scripts previously completed, allow polling refresh
+    completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+    if completed_file.is_file() and script_status not in ['running', 'sim launched']:
+        ret[6] = False
+
+    return ret
+
+
+def run_scripts(scripts_to_run, sim_times, configs, radar_info):
+    """
+    This function handles the execution of all processing scripts 
+    """
+    log_string = (
+        f"\n"
+        f"=========================Simulation Settings========================\n"
+        f"Session ID: {configs['SESSION_ID']}\n"
+        f"{sim_times}\n"
+        f"{radar_info}\n"
+        f"====================================================================\n"
+    )
+    logging.info(log_string)
+    status = 'running'
+    if scripts_to_run['query_and_download_radar'] and status == 'running':
+        status = query_and_download_radars(radar_info, configs, sim_times)
+        logging.info(f"Radar download status: {status}")
+    if scripts_to_run['munger_radar'] and status == 'running':
+        status = munger_radar(radar_info, configs, sim_times)
+        logging.info(f"Radar mungering status: {status}")
+
+    return status
 
 @app.callback(
     Output('show_script_progress', 'children', allow_duplicate=True),
-    #Output('sim_times', 'data', allow_duplicate=True),
     Input('sim_times', 'data'),
     State('configs', 'data'),
     State('radar_info', 'data'),
     prevent_initial_call=True,
-    running=[
-        (Output('start_year', 'disabled'), True, False),
-        (Output('start_month', 'disabled'), True, False),
-        (Output('start_day', 'disabled'), True, False),
-        (Output('start_hour', 'disabled'), True, False),
-        (Output('start_minute', 'disabled'), True, False),
-        (Output('duration', 'disabled'), True, False),
-        (Output('radar_quantity', 'disabled'), True, False),
-        (Output('map_btn', 'disabled'), True, False),
-        (Output('new_radar_selection', 'disabled'), True, False),
-        (Output('run_scripts_btn', 'disabled'), True, False),
-        # (Output('playback_clock_store', 'disabled'), True, False),
-        (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
-        (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
-        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
-        (Output('refresh_polling_btn', 'disabled'), True, False),
-        (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
-        # wait to enable change time dropdown
-        (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, False),
-    ])
+)
 def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
@@ -1024,7 +1194,13 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         raise PreventUpdate
     
     button_source = sim_times.get('source')
-
+    scripts_to_run = {
+            'query_and_download_radar': True,
+            'munger_radar': True,
+            'placefiles': True,
+            'nse_placefiles': True,
+            'hodographs': True
+    }
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
         #if config.PLATFORM != 'WINDOWS':
@@ -1036,18 +1212,76 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
             #     )
             # except (smtplib.SMTPException, ConnectionError) as e:
             #     print(f"Failed to send email: {e}")
+        
+        # For future use: add user overrides to skip certain scripts
+        #######
+        #scripts_to_run['placefiles'] = False
+        #scripts_to_run['nse_placefiles'] = False
+        #scripts_to_run['hodographs'] = False
         remove_files_and_dirs(configs)
-        run_with_cancel_button(configs, sim_times, radar_info)
+        # If scripts previously completed, remove that status file
+        completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+        if completed_file.is_file():
+            completed_file.unlink()
+            
+        #run_with_cancel_button(configs, sim_times, radar_info)
 
     # Run the refresh polling scripts
     elif button_source == 'refresh_polling_btn':
-        run_refresh_polling_scripts(sim_times, configs, radar_info)
+        # The following scripts are never run for a polling refresh
+        scripts_to_run['query_and_download_radar'] = False
+        scripts_to_run['placefiles'] = False
+        scripts_to_run['nse_placefiles'] = False
+
+        # Add any user overrides from the UI
+        prep_refresh_polling(configs)
     
     else:
         logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
         raise PreventUpdate
-
+    
+    # Run the processing scripts
+    write_status_file('running', f"{configs['DATA_DIR']}/script_status.txt")
+    status = run_scripts(scripts_to_run, sim_times, configs, radar_info)
+    if status == 'running':
+        write_status_file('completed', f"{configs['DATA_DIR']}/script_status.txt")
+        write_status_file('', f"{configs['DATA_DIR']}/completed.txt")
     return no_update
+
+
+def prep_refresh_polling(configs):
+    """
+    Handle initial file removal prior to re-running of pertinent processing script
+    """
+    # Remove the original file_times.txt file. This will get re-created by munger.py
+    try:
+        os.remove(f"{configs['ASSETS_DIR']}/file_times.txt")
+    except FileNotFoundError:
+        pass
+
+    # Delete the uncompressed/munged radar files from the data directory. Needed if a user
+    # canceled a previous refresh before mungering finishes, leaving orphaned .uncompressed
+    # files in the radar data directory.
+    try:
+        remove_munged_radar_files(configs)
+    except KeyError as e:
+        logging.exception("Error removing munged radar files ", exc_info=True)
+
+    # Remove old mungered files 
+    for root, _, files in os.walk(configs['POLLING_DIR']):
+        for name in files:
+            if name not in ['grlevel2.cfg']:
+                logging.info(f"Deleting {name}")
+                os.remove(os.path.join(root, name))
+
+    # Remove original hodograph images
+    hodo_images = glob(f"{configs['HODOGRAPHS_DIR']}/*.png")
+    for image in hodo_images:
+        try:
+            os.remove(image)
+        except:
+            logging.exception(f"Error removing: {image}")
+
 
 @app.callback(
     Output('sim_times', 'data'),
@@ -1341,7 +1575,7 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         f"********************************************************************\n"
     )
     logging.info(log_string)
-
+    write_status_file('sim launched', f"{cfg['DATA_DIR']}/script_status.txt")
     return (btn_text, btn_disabled, False, playback_running, start, style, end, style, options,
             False, playback_specs, refresh_polling_btn_disabled, run_scripts_btn_disabled)
 
@@ -1567,75 +1801,14 @@ def update_day_dropdown(selected_year, selected_month):
 # based on the current real world time. It will rerun l2munger, shift_placefiles, and will 
 # regenerate dir.list, event_times, file_times, and hodographs. 
 def run_refresh_polling_scripts(sim_times, cfg, radar_info): 
-    # Remove the original file_times.txt file. This will get re-created by munger.py
-    try:
-        os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
-    except FileNotFoundError:
-        pass
-
-    # Delete the uncompressed/munged radar files from the data directory. Needed if a user
-    # canceled a previous refresh before mungering finishes, leaving orphaned .uncompressed
-    # files in the radar data directory.
-    try:
-        remove_munged_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-
-    # --------- Munger ---------------------------------------------------------
-    # This for loop removes the now-stale munged radar files. We do this in a 
-    # first loop  to delete all of the files at once. Otherwise, the monitor bar 
-    # will bounce back-and-forth if the case has more than one radar.
-    if len(radar_info['radar_list']) > 0:
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-            old_files = glob(f"{cfg['POLLING_DIR']}/{new_radar}/*.gz")
-            for f in old_files:
-                logging.info(f"Deleting {f}")
-                os.remove(f)
-
-    if len(radar_info['radar_list']) > 0:
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-            args = [radar, str(sim_times['playback_start_str']),
-                    str(sim_times['event_duration']),
-                    str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
-                    cfg['POLLING_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['L2MUNGER_FILEPATH'], 
-                    cfg['DEBZ_FILEPATH'], new_radar]
-            res = call_function(utils.exec_script, Path(cfg['MUNGER_SCRIPT_FILEPATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-            
-    # Delete the uncompressed/munged radar files from the data directory
-    try:
-        remove_munged_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-            
     # --------- Hodographs ---------------------------------------------------------
     # Remove original images
-    hodo_images = glob(f"{cfg['HODOGRAPHS_DIR']}/*.png")
-    for image in hodo_images:
-        try:
-            os.remove(image)
-        except:
-            logging.exception(f"Error removing: {image}")
+    #hodo_images = glob(f"{cfg['HODOGRAPHS_DIR']}/*.png")
+    #for image in hodo_images:
+    #    try:
+    #        os.remove(image)
+    #    except:
+    #        logging.exception(f"Error removing: {image}")
 
     create_radar_dict(radar_info)
     for radar, data in radar_info['radar_dict'].items():
