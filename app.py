@@ -264,31 +264,40 @@ def remove_munged_radar_files(cfg) -> None:
     after the pre-processing scripts have completed. These files are no longer needed 
     as the appropriate files have been exported to the /assets/xx/polling directory. 
     
-    copies the original files to the user downloads directory so they can be
-    downloaded by the user if desired.
+    #copies the original files to the user downloads directory so they can be
+    #downloaded by the user if desired.
     """
     regex_pattern = r'^(.{4})(\d{8})_(\d{6})$'
     #raw_pattern = r'^(.{4})(\d{8})_(\d{6})_(V\d{2})$'
     # Searches for filenames with either Vxx or .gz. Older radar files are gzipped.
-    raw_pattern = r'^.{4}\d{8}_\d{6}(_V\d{2}|\.gz)$'
+    #raw_pattern = r'^.{4}\d{8}_\d{6}(_V\d{2}|\.gz)$'
     for root, _, files in os.walk(cfg['RADAR_DIR']):
         if Path(root).name == 'downloads':
             for name in files:
                 thisfile = os.path.join(root, name)
                 matched = re.match(regex_pattern, name)
-                raw_matched = re.match(raw_pattern, name)
+                #raw_matched = re.match(raw_pattern, name)
                 if matched or '.uncompressed' in name:
                     os.remove(thisfile)
-                if raw_matched:
-                    shutil.copy2(thisfile, cfg['USER_DOWNLOADS_DIR'])
+                #if raw_matched:
+                #    shutil.copy2(thisfile, cfg['USER_DOWNLOADS_DIR'])
 
 def zip_downloadable_radar_files(cfg) -> None:
     """
     After all radar files have been processed and are ready for download, this function
-    zips up the radar files already in the user downloads directory.
+    zips up the radar files into the user downloads directory.
     """
-    shutil.make_archive('radar_files', 'zip', cfg['USER_DOWNLOADS_DIR'])
-    shutil.move('radar_files.zip', f"{cfg['USER_DOWNLOADS_DIR']}/original_radar_files.zip")
+    raw_pattern = r'^.{4}\d{8}_\d{6}(_V\d{2}|\.gz)$'
+    zip_filename = f"{cfg['USER_DOWNLOADS_DIR']}/original_radar_files.zip"
+    with zipfile.ZipFile(zip_filename, 'w') as zipf:
+        for root, _, files in os.walk(cfg['RADAR_DIR']):
+            for f in files: 
+                raw_matched = re.match(raw_pattern, f)
+                if raw_matched:
+                    file_path = os.path.join(root, f)
+                    zipf.write(file_path, f)
+    #shutil.make_archive(zip_filename, 'zip', cfg['USER_DOWNLOADS_DIR'])
+    #shutil.move(f"{zip_filename}.zip", f"{cfg['USER_DOWNLOADS_DIR']}/original_radar_files.zip")
 
 
 def zip_original_placefiles(cfg) -> None:
@@ -794,203 +803,6 @@ def call_function(func, *args, **kwargs):
         )
     return result
 
-
-def run_with_cancel_button(cfg, sim_times, radar_info):
-    """
-    This version of the script-launcher trying to work in cancel button
-    """
-    UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-
-    # based on list of selected radars, create a dictionary of radar metadata
-    try:
-        create_radar_dict(radar_info)
-        copy_grlevel2_cfg_file(cfg)
-    except (IOError, ValueError, KeyError) as e:
-        logging.exception(
-            "Error creating radar dict or config file: %s",e,exc_info=True)
-        
-    log_string = (
-        f"\n"
-        f"=========================Simulation Settings========================\n"
-        f"Session ID: {cfg['SESSION_ID']}\n"
-        f"{sim_times}\n"
-        f"{radar_info}\n"
-        f"====================================================================\n"
-    )
-    logging.info(log_string)
-
-    if len(radar_info['radar_list']) > 0:
-
-        # Create initial dictionary of expected radar files.
-        # TO DO: report back issues with radar downloads (e.g. 0 files found)
-        res = call_function(query_radar_files, cfg, radar_info, sim_times)
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            return
-
-        # Radar downloading and mungering steps
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-            # --------- Links Page -----------------------------------------------------
-            #cfg['LINK_BASE'], cfg['LINKS_HTML_PAGE']
-            args = [cfg['LINK_BASE'], cfg['LINKS_HTML_PAGE']]
-            res = call_function(utils.exec_script, Path(cfg['LINKS_PAGE_SCRIPT_PATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # Radar download
-            args = [radar, str(sim_times['event_start_str']),
-                    str(sim_times['event_duration']), str(True), cfg['RADAR_DIR']]
-            res = call_function(utils.exec_script, Path(cfg['NEXRAD_SCRIPT_PATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # Munger
-            args = [radar, str(sim_times['playback_start_str']),
-                    str(sim_times['event_duration']),
-                    str(sim_times['simulation_seconds_shift']
-                        ), cfg['RADAR_DIR'],
-                    cfg['POLLING_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['L2MUNGER_FILEPATH'], cfg['DEBZ_FILEPATH'],
-                    new_radar]
-            res = call_function(utils.exec_script, Path(cfg['MUNGER_SCRIPT_FILEPATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # this gives the user some radar data to poll while other scripts are running
-            try:
-                UpdateDirList(new_radar, 'None',
-                              cfg['POLLING_DIR'], initialize=True)
-            except (IOError, ValueError, KeyError) as e:
-                print(f"Error with UpdateDirList: {e}")
-                logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
-
-    # Delete the uncompressed/munged radar files from the data directory
-    try:
-        remove_munged_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-
-
-    # --------- LSR Placefiles -----------------------------------------------------
-    #  Not monitored currently due to how quick this executes
-    # center lat, center lon, event start, duration, LSR csv source dir, placefile output dir
-    args = [str(radar_info['lat']), str(radar_info['lon']),
-            str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            cfg['DATA_DIR'], cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['LSR_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- event times text file ----------------------------------------------
-    # -- seconds_shift, csv_dir, radar_dir, html_file, text_file -------------------
-    args = [str(sim_times['simulation_seconds_shift']), cfg['DATA_DIR'], cfg['RADAR_DIR'],
-            cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # Now that all radar files are in assets/{}/downloads dir, zip them up
-    try:
-        zip_downloadable_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error zipping radar files ", exc_info=True)
-
-    # --------- Surface observations placefiles -------------------------------------
-    # center lat, center lon, start timestr, duration, placefile output directory
-    args = [str(radar_info['lat']), str(radar_info['lon']),
-            sim_times['event_start_str'], str(sim_times['event_duration']),
-            cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['OBS_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- ProbSevere download -------------------------------------------------
-    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            cfg['PROBSEVERE_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- ProbSevere placefiles -----------------------------------------------
-    # -- center lat, center lon, data source directory, placefile output directory --
-    args = [str(radar_info['lat']), str(radar_info['lon']),cfg['PROBSEVERE_DIR'],
-            cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_PLACEFILE_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- NSE placefiles ------------------------------------------------------
-    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            cfg['SCRIPTS_DIR'], cfg['DATA_DIR'], cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['NSE_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # Now that all original placefiles should be available, zip them up
-    try:
-        zip_original_placefiles(cfg)
-    except KeyError as e:
-        logging.exception("Error zipping original placefiles ", exc_info=True)
-
-    # There always is a timeshift with a simulation, so this script needs to
-    # execute every time, even if a user doesn't select a radar to transpose to.
-    logging.info("Entering function run_transpose_script")
-    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
-
-    # --------- Soundings ---------------------------------------------------------
-   #radar_dict = {'KGRR': {'lat':42.8939, 'lon':-85.54479},
-   #               'KDTX': {'lat':42.69997, 'lon':-83.47167}}
-    #SIM_START = '2024-05-07 21:30'
-    #ASSETS_DIR = '/data/cloud-radar-server/assets'
-    #if sys.platform.startswith('win'):
-    #    Gr2aSoundings(radar_dict, SIM_START, '120', '24835500', ASSETS_DIR)
-    #args = [radar_info, str(sim_times['event_start_str']), str(sim_times['event_duration']),
-    #            str(sim_times['simulation_seconds_shift']), cfg['ASSETS_DIR']]
-    #res = call_function(utils.exec_script, Path(cfg['SOUNDINGS_SCRIPT_PATH']), args,
-    #                    cfg['SESSION_ID'])
-    #if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-    #    return
-
-    # --------- Hodographs ---------------------------------------------------------
-    for radar, data in radar_info['radar_dict'].items():
-        try:
-            asos_one = data['asos_one']
-            asos_two = data['asos_two']
-        except KeyError as e:
-            logging.exception("Error getting radar metadata: ", exc_info=True)
-
-        # Execute hodograph script
-        args = [radar, radar_info['new_radar'], asos_one, asos_two,
-                str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
-                cfg['HODOGRAPHS_DIR']]
-        res = call_function(utils.exec_script, Path(cfg['HODO_SCRIPT_PATH']), args,
-                            cfg['SESSION_ID'])
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            return
-
-        try:
-            UpdateHodoHTML(
-                'None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-        except (IOError, ValueError, KeyError) as e:
-            print("Error updating hodo html: ", e)
-            logging.exception("Error updating hodo html: %s",e, exc_info=True)
-
 def write_status_file(value: str, filename: str):
     """
     For monitoring individual processing script status (can't rely on dcc.Store to
@@ -1057,6 +869,12 @@ def query_and_download_radars(radar_info, configs, sim_times):
         except Exception as e:
             logging.exception(f"Radar download failed for {radar}")
 
+    # Now that all radar files are in assets/{}/downloads dir, zip them up
+    try:
+        zip_downloadable_radar_files(configs)
+    except KeyError as e:
+        logging.exception("Error zipping radar files ", exc_info=True)
+
     logging.info(f"Downloads completed for radars: {radar_list}")
     status = 'running'
     write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
@@ -1102,53 +920,116 @@ def munger_radar(radar_info, configs, sim_times):
     except KeyError as e:
         logging.exception("Error removing munged radar files ", exc_info=True)
 
-    # Now that all radar files are in assets/{}/downloads dir, zip them up
-    try:
-        zip_downloadable_radar_files(configs)
-    except KeyError as e:
-        logging.exception("Error zipping radar files ", exc_info=True)
-
     status = 'running'
     write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
     return status
 
-@app.callback(
-    [Output('radar_quantity', 'disabled', allow_duplicate=True), 
-    Output('map_btn', 'disabled', allow_duplicate=True), 
-    Output('new_radar_selection', 'disabled', allow_duplicate=True),
-    Output('run_scripts_btn', 'disabled', allow_duplicate=True), 
-    Output('confirm_radars_btn', 'disabled', allow_duplicate=True), 
-    Output('playback_btn', 'disabled', allow_duplicate=True), 
-    Output('refresh_polling_btn', 'disabled', allow_duplicate=True), 
-    Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),  
-    Output('change_time', 'disabled', allow_duplicate=True), 
-    Output('cancel_scripts', 'disabled', allow_duplicate=True), 
-    Output('playback_btn', 'children', allow_duplicate=True)],
-    Input('script_status_interval', 'n_intervals'),
-    State('configs', 'data'),
-    prevent_initial_call=True
-)
-def button_control(_n, configs):
-    status_file = f"{configs['DATA_DIR']}/script_status.txt"
-    script_status = read_status_file(status_file)
-    trues = [True]*9
-    if script_status == 'running':
-        ret = trues + [False, 'Launch Simulation']
-    elif script_status in ['cancelled', 'startup']:
-        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
-    elif script_status == 'completed':
-        ret = [False]*7 + [True, False, True, 'Launch Simulation'] 
-    elif script_status == 'sim launched':
-        ret = no_update # Releases button control to the clock callbacks
-    else: 
-        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
 
-    # If scripts previously completed, allow polling refresh
-    completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
-    if completed_file.is_file() and script_status not in ['running', 'sim launched']:
-        ret[6] = False
+def generate_fast_placefiles(radar_info, configs, sim_times):
+    status = 'cancelled'
+    # --------- LSRs ----------------------------------------------------------------
+    args = [str(radar_info['lat']), str(radar_info['lon']),
+            str(sim_times['event_start_str']), str(sim_times['event_duration']),
+            configs['DATA_DIR'], configs['PLACEFILES_DIR']]
+    res = call_function(utils.exec_script, Path(configs['LSR_SCRIPT_PATH']), args,
+                        configs['SESSION_ID'])
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        logging.warning("LSR placefile generation was cancelled.")
+        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+        return status
 
-    return ret
+    # --------- Surface observations placefiles -------------------------------------
+    args = [str(radar_info['lat']), str(radar_info['lon']),
+            sim_times['event_start_str'], str(sim_times['event_duration']),
+            configs['PLACEFILES_DIR']]
+    res = call_function(utils.exec_script, Path(configs['OBS_SCRIPT_PATH']), args,
+                        configs['SESSION_ID'])
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        logging.warning("Surface observations placefile generation was cancelled.")
+        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+        return status
+    
+    # --------- ProbSevere download -------------------------------------------------
+    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
+            configs['PROBSEVERE_DIR']]
+    res = call_function(utils.exec_script, Path(configs['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']),
+                        args, configs['SESSION_ID'])
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        logging.warning("ProbSevere download was cancelled.")
+        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+        return status
+    
+    # --------- ProbSevere placefiles -----------------------------------------------
+    args = [str(radar_info['lat']), str(radar_info['lon']), configs['PROBSEVERE_DIR'],
+            configs['PLACEFILES_DIR']]
+    res = call_function(utils.exec_script, Path(configs['PROBSEVERE_PLACEFILE_SCRIPT_PATH']),
+                        args, configs['SESSION_ID'])
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        logging.warning("ProbSevere placefile generation was cancelled.")
+        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+        return status
+
+    # Always write an event times placefile, and events.txt and events.html output.
+    # --------- Event times placefiles ----------------------------------------------
+    args = [str(sim_times['simulation_seconds_shift']), configs['DATA_DIR'], 
+            configs['RADAR_DIR'], configs['EVENTS_HTML_PAGE'], 
+            configs['EVENTS_TEXT_FILE']]
+    res = call_function(utils.exec_script, Path(configs['EVENT_TIMES_SCRIPT_PATH']), 
+                        args, configs['SESSION_ID'])
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        logging.warning("Events placefile generation was cancelled.")
+        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+        return status
+    
+    status = 'running'
+    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+    return status
+
+
+def generate_nse_placefiles(configs, sim_times):
+    status = 'cancelled'
+    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
+            configs['SCRIPTS_DIR'], configs['DATA_DIR'], configs['PLACEFILES_DIR']]
+    res = call_function(utils.exec_script, Path(configs['NSE_SCRIPT_PATH']), args,
+                        configs['SESSION_ID'])
+    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+        return status
+        
+    status = 'running'
+    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+    return status
+
+
+def generate_hodographs(radar_info, configs, sim_times):
+    status = 'cancelled'
+    for radar, data in radar_info['radar_dict'].items():
+        try:
+            asos_one = data['asos_one']
+            asos_two = data['asos_two']
+        except KeyError as e:
+            logging.exception("Error getting radar metadata: ", exc_info=True)
+
+        # Execute hodograph script
+        args = [radar, radar_info['new_radar'], asos_one, asos_two,
+                str(sim_times['simulation_seconds_shift']), configs['RADAR_DIR'],
+                configs['HODOGRAPHS_DIR']]
+        res = call_function(utils.exec_script, Path(configs['HODO_SCRIPT_PATH']), 
+                            args, configs['SESSION_ID'])
+        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
+            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+            return status
+
+        try:
+            UpdateHodoHTML(
+                'None', configs['HODOGRAPHS_DIR'], configs['HODOGRAPHS_PAGE'])
+        except (IOError, ValueError, KeyError) as e:
+            print("Error updating hodo html: ", e)
+            logging.exception("Error updating hodo html: %s",e, exc_info=True)
+
+    status = 'running'
+    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+    return status
 
 
 def run_scripts(scripts_to_run, sim_times, configs, radar_info):
@@ -1168,9 +1049,33 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     if scripts_to_run['query_and_download_radar'] and status == 'running':
         status = query_and_download_radars(radar_info, configs, sim_times)
         logging.info(f"Radar download status: {status}")
+
     if scripts_to_run['munger_radar'] and status == 'running':
         status = munger_radar(radar_info, configs, sim_times)
         logging.info(f"Radar mungering status: {status}")
+
+    if scripts_to_run['placefiles'] and status == 'running':
+        status = generate_fast_placefiles(radar_info, configs, sim_times)
+        logging.info(f"Surface placefile status: {status}")
+
+    if scripts_to_run['nse_placefiles'] and status == 'running':
+        status = generate_nse_placefiles(configs, sim_times)
+        logging.info(f"NSE placefile status: {status}")
+
+    # There always is a timeshift with a simulation, so this script needs to
+    # execute every time, even if a user doesn't select a radar to transpose to.
+    logging.info("Entering function run_transpose_script")
+    run_transpose_script(configs['PLACEFILES_DIR'], sim_times, radar_info)
+
+    # Zip placefiles up, even if user bypassed the nse placefile generation step.
+    try:
+        zip_original_placefiles(configs)
+    except Exception as e:
+        logging.exception("Error zipping original placefiles ", exc_info=True)
+
+    if scripts_to_run['hodographs'] and status == 'running':
+        status = generate_hodographs(radar_info, configs, sim_times)
+        logging.info(f"Hodograph status: {status}")
 
     return status
 
@@ -1215,16 +1120,15 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         
         # For future use: add user overrides to skip certain scripts
         #######
-        #scripts_to_run['placefiles'] = False
-        #scripts_to_run['nse_placefiles'] = False
-        #scripts_to_run['hodographs'] = False
+        scripts_to_run['placefiles'] = False
+        scripts_to_run['nse_placefiles'] = False
+        scripts_to_run['hodographs'] = False
         remove_files_and_dirs(configs)
+
         # If scripts previously completed, remove that status file
         completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
         if completed_file.is_file():
             completed_file.unlink()
-            
-        #run_with_cancel_button(configs, sim_times, radar_info)
 
     # Run the refresh polling scripts
     elif button_source == 'refresh_polling_btn':
@@ -1327,6 +1231,44 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     logging.info(log_string)
     return sim_times
 
+
+@app.callback(
+    [Output('radar_quantity', 'disabled', allow_duplicate=True), 
+    Output('map_btn', 'disabled', allow_duplicate=True), 
+    Output('new_radar_selection', 'disabled', allow_duplicate=True),
+    Output('run_scripts_btn', 'disabled', allow_duplicate=True), 
+    Output('confirm_radars_btn', 'disabled', allow_duplicate=True), 
+    Output('playback_btn', 'disabled', allow_duplicate=True), 
+    Output('refresh_polling_btn', 'disabled', allow_duplicate=True), 
+    Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),  
+    Output('change_time', 'disabled', allow_duplicate=True), 
+    Output('cancel_scripts', 'disabled', allow_duplicate=True), 
+    Output('playback_btn', 'children', allow_duplicate=True)],
+    Input('script_status_interval', 'n_intervals'),
+    State('configs', 'data'),
+    prevent_initial_call=True
+)
+def button_control(_n, configs):
+    status_file = f"{configs['DATA_DIR']}/script_status.txt"
+    script_status = read_status_file(status_file)
+    trues = [True]*9
+    if script_status == 'running':
+        ret = trues + [False, 'Launch Simulation']
+    elif script_status in ['cancelled', 'startup']:
+        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
+    elif script_status == 'completed':
+        ret = [False]*7 + [True, False, True, 'Launch Simulation'] 
+    elif script_status == 'sim launched':
+        ret = no_update # Releases button control to the clock callbacks
+    else: 
+        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
+
+    # If scripts previously completed, allow polling refresh
+    completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+    if completed_file.is_file() and script_status not in ['running', 'sim launched']:
+        ret[6] = False
+
+    return ret
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
 ################################################################################################
@@ -1791,60 +1733,7 @@ def update_day_dropdown(selected_year, selected_month):
     day_options = [{'label': str(day), 'value': day}
                    for day in range(1, num_days+1)]
     return day_options
-
-################################################################################################
-# ------------------------Refresh Polling Times callback  --------------------------------------
-################################################################################################
-# After a certain time, radar data will become too "old" for GR to continue polling. This seems
-# be when radar data is more than 3 hours older than the current time. Clicking the "Refresh 
-# Polling Times" button will execute this callback which will regenerate new simulation times
-# based on the current real world time. It will rerun l2munger, shift_placefiles, and will 
-# regenerate dir.list, event_times, file_times, and hodographs. 
-def run_refresh_polling_scripts(sim_times, cfg, radar_info): 
-    # --------- Hodographs ---------------------------------------------------------
-    # Remove original images
-    #hodo_images = glob(f"{cfg['HODOGRAPHS_DIR']}/*.png")
-    #for image in hodo_images:
-    #    try:
-    #        os.remove(image)
-    #    except:
-    #        logging.exception(f"Error removing: {image}")
-
-    create_radar_dict(radar_info)
-    for radar, data in radar_info['radar_dict'].items():
-        try:
-            asos_one = data['asos_one']
-            asos_two = data['asos_two']
-        except KeyError as e:
-            logging.exception("Error getting radar metadata: ", exc_info=True)
-
-        # Execute hodograph script
-        args = [radar, radar_info['new_radar'], asos_one, asos_two,
-                str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
-                cfg['HODOGRAPHS_DIR']]
-        res = call_function(utils.exec_script, Path(cfg['HODO_SCRIPT_PATH']), args,
-                            cfg['SESSION_ID'])
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            return
-
-        try:
-            UpdateHodoHTML(
-                'None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-        except (IOError, ValueError, KeyError) as e:
-            print("Error updating hodo html: ", e)
-            logging.exception("Error updating hodo html: %s",e, exc_info=True)
-            
-    # --------- Update event times file --------------------------------------------------
-    args = [str(sim_times['simulation_seconds_shift']), cfg['DATA_DIR'], cfg['RADAR_DIR'],
-            cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-    
-    # --------- Synchronize placefile times with the new sim times ------------------------
-    logging.info("Entering function run_transpose_script")
-    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)      
+  
 
 ################################################################################################
 # ----------------------------- Upload callback  -----------------------------------------------
