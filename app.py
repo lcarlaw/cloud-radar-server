@@ -819,17 +819,21 @@ def read_status_file(filename: str):
         pass 
     return status
 
+################################################################################################
+# ----------------------------- Processing Scripts  --------------------------------------------
+################################################################################################
+
 def query_and_download_radars(radar_info, configs, sim_times):
     try:
-        create_radar_dict(radar_info)
+        #create_radar_dict(radar_info)
         copy_grlevel2_cfg_file(configs)
     except (IOError, ValueError, KeyError) as e:
         logging.exception("Error creating radar dict or cfg file: %s",e,exc_info=True)
 
     radar_list = radar_info.get('radar_list', [])
     session_id = configs['SESSION_ID']
-    
     status = 'cancelled'
+
     # Write the links html page. 
     try:
         args = [configs['LINK_BASE'], configs['LINKS_HTML_PAGE']]
@@ -952,7 +956,8 @@ def generate_fast_placefiles(radar_info, configs, sim_times):
     # --------- ProbSevere download -------------------------------------------------
     args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
             configs['PROBSEVERE_DIR']]
-    res = call_function(utils.exec_script, Path(configs['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']),
+    res = call_function(utils.exec_script, 
+                        Path(configs['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']),
                         args, configs['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         logging.warning("ProbSevere download was cancelled.")
@@ -962,13 +967,20 @@ def generate_fast_placefiles(radar_info, configs, sim_times):
     # --------- ProbSevere placefiles -----------------------------------------------
     args = [str(radar_info['lat']), str(radar_info['lon']), configs['PROBSEVERE_DIR'],
             configs['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(configs['PROBSEVERE_PLACEFILE_SCRIPT_PATH']),
+    res = call_function(utils.exec_script, 
+                        Path(configs['PROBSEVERE_PLACEFILE_SCRIPT_PATH']),
                         args, configs['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         logging.warning("ProbSevere placefile generation was cancelled.")
         write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
         return status
+    
+    status = 'running'
+    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
+    return status
 
+
+def generate_events_files(configs, sim_times):
     # Always write an event times placefile, and events.txt and events.html output.
     # --------- Event times placefiles ----------------------------------------------
     args = [str(sim_times['simulation_seconds_shift']), configs['DATA_DIR'], 
@@ -978,8 +990,8 @@ def generate_fast_placefiles(radar_info, configs, sim_times):
                         args, configs['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
         logging.warning("Events placefile generation was cancelled.")
-        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-        return status
+        write_status_file('cancelled', f"{configs['DATA_DIR']}/script_status.txt")
+        return 'cancelled'
     
     status = 'running'
     write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
@@ -1046,37 +1058,44 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     )
     logging.info(log_string)
     status = 'running'
-    if scripts_to_run['query_and_download_radar'] and status == 'running':
-        status = query_and_download_radars(radar_info, configs, sim_times)
+    create_radar_dict(radar_info)
+    if scripts_to_run['query_and_download_radar']:
         logging.info(f"Radar download status: {status}")
+        status = query_and_download_radars(radar_info, configs, sim_times)
 
     if scripts_to_run['munger_radar'] and status == 'running':
-        status = munger_radar(radar_info, configs, sim_times)
         logging.info(f"Radar mungering status: {status}")
+        status = munger_radar(radar_info, configs, sim_times)
 
     if scripts_to_run['placefiles'] and status == 'running':
-        status = generate_fast_placefiles(radar_info, configs, sim_times)
         logging.info(f"Surface placefile status: {status}")
+        status = generate_fast_placefiles(radar_info, configs, sim_times)
+
+    # The events files are always updated
+    if status == 'running':
+        logging.info(f"Event files status: {status}")
+        status = generate_events_files(configs, sim_times)
 
     if scripts_to_run['nse_placefiles'] and status == 'running':
-        status = generate_nse_placefiles(configs, sim_times)
         logging.info(f"NSE placefile status: {status}")
+        status = generate_nse_placefiles(configs, sim_times)
 
     # There always is a timeshift with a simulation, so this script needs to
     # execute every time, even if a user doesn't select a radar to transpose to.
-    logging.info("Entering function run_transpose_script")
-    run_transpose_script(configs['PLACEFILES_DIR'], sim_times, radar_info)
+    if status == 'running':
+        logging.info("Entering function run_transpose_script")
+        run_transpose_script(configs['PLACEFILES_DIR'], sim_times, radar_info)
 
-    # Zip placefiles up, even if user bypassed the nse placefile generation step.
-    try:
-        zip_original_placefiles(configs)
-    except Exception as e:
-        logging.exception("Error zipping original placefiles ", exc_info=True)
+        # Zip placefiles up, even if user bypassed the nse placefile generation step.
+        try:
+            zip_original_placefiles(configs)
+        except Exception as e:
+            logging.exception("Error zipping original placefiles ", exc_info=True)
 
     if scripts_to_run['hodographs'] and status == 'running':
-        status = generate_hodographs(radar_info, configs, sim_times)
         logging.info(f"Hodograph status: {status}")
-
+        status = generate_hodographs(radar_info, configs, sim_times)
+        
     return status
 
 @app.callback(
@@ -1120,9 +1139,9 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         
         # For future use: add user overrides to skip certain scripts
         #######
-        scripts_to_run['placefiles'] = False
+        scripts_to_run['placefiles'] = True
         scripts_to_run['nse_placefiles'] = False
-        scripts_to_run['hodographs'] = False
+        #scripts_to_run['hodographs'] = False
         remove_files_and_dirs(configs)
 
         # If scripts previously completed, remove that status file
@@ -1133,8 +1152,8 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     # Run the refresh polling scripts
     elif button_source == 'refresh_polling_btn':
         # The following scripts are never run for a polling refresh
-        scripts_to_run['query_and_download_radar'] = False
         scripts_to_run['placefiles'] = False
+        scripts_to_run['query_and_download_radar'] = False
         scripts_to_run['nse_placefiles'] = False
 
         # Add any user overrides from the UI
