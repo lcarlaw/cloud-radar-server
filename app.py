@@ -596,7 +596,7 @@ def generate_layout(layout_has_initialized, children, configs):
                                         dbc.Row([
                                             sim_year_section, sim_month_section, sim_day_selection,
                                             sim_hour_section, sim_minute_section,
-                                            sim_duration_section, lc.spacer,
+                                            sim_duration_section, lc.output_selections, lc.spacer,
                                             lc.step_time_confirm])], style={'padding': '1em'}),
                               ], style=lc.section_box_pad)])
             ]), lc.spacer,lc.spacer_mini,
@@ -1103,9 +1103,10 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     Input('sim_times', 'data'),
     State('configs', 'data'),
     State('radar_info', 'data'),
+    State('output_selections', 'value'),
     prevent_initial_call=True,
 )
-def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
+def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info, output_selections):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
     turn happens after either the run scripts or refresh polling buttons are clicked.  
@@ -1121,10 +1122,15 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     scripts_to_run = {
             'query_and_download_radar': True,
             'munger_radar': True,
-            'placefiles': True,
-            'nse_placefiles': True,
-            'hodographs': True
+            'placefiles': False,
+            'nse_placefiles': False,
+            'hodographs': False
     }
+    # Add user-selections to processing queue
+    if 'Surface placefiles': scripts_to_run['placefiles'] = True
+    if 'NSE placefiles': scripts_to_run['nse_placefiles'] = True
+    if 'Hodographs': scripts_to_run['hodographs'] = True
+    
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
         #if config.PLATFORM != 'WINDOWS':
@@ -1136,12 +1142,6 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
             #     )
             # except (smtplib.SMTPException, ConnectionError) as e:
             #     print(f"Failed to send email: {e}")
-        
-        # For future use: add user overrides to skip certain scripts
-        #######
-        scripts_to_run['placefiles'] = False
-        scripts_to_run['nse_placefiles'] = False
-        scripts_to_run['hodographs'] = False
         remove_files_and_dirs(configs)
 
         # If scripts previously completed, remove that status file
@@ -1152,8 +1152,8 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
     # Run the refresh polling scripts
     elif button_source == 'refresh_polling_btn':
         # The following scripts are never run for a polling refresh
-        scripts_to_run['placefiles'] = False
         scripts_to_run['query_and_download_radar'] = False
+        scripts_to_run['placefiles'] = False
         scripts_to_run['nse_placefiles'] = False
 
         # Add any user overrides from the UI

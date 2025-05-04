@@ -210,7 +210,7 @@ full_upload_section = dbc.Container(
 # ----------------------------- Time/duration components  --------------------------------------
 ################################################################################################
 
-STEP_SELECT_EVENT_TIME = "Select Event Start Date, Time (in UTC), and Duration (in Minutes)"
+STEP_SELECT_EVENT_TIME = "Select Event Start Date, Time (in UTC), Duration (in Minutes) and Outputs"
 STEP_SELECT_TIME = "Select Simulation Start Date, Time (in UTC), and Duration (in Minutes)"
 
 step_select_event_time_section = dbc.Container(
@@ -229,6 +229,12 @@ step_hour = html.Div(children="Hour", style=time_headers)
 step_minute = html.Div(children="Minute", style=time_headers)
 step_duration = html.Div(children="Duration", style=time_headers)
 
+# Not a time selection, but makes the most sense to include in this top section. 
+output_selections_header = html.Div(children="Outputs", style=time_headers)
+output_selections = dbc.Col(html.Div([output_selections_header, dcc.Checklist(
+                            ['Surface placefiles', 'NSE placefiles', 'Hodographs'],
+                            ['Surface placefiles'], id='output_selections')
+                    ]))
 
 CONFIRM_TIMES_TEXT = "Confirm start time and duration"
 confirm_times_section = dbc.Col(
@@ -236,6 +242,8 @@ confirm_times_section = dbc.Col(
 time_settings_readout = dbc.Col(html.Div(id='show_time_data', style=feedback))
 step_time_confirm = dbc.Container(html.Div([dbc.Row([confirm_times_section, time_settings_readout
                                                      ])]))
+
+
 
 radar_id = html.Div(id='radar', style={'display': 'none'})
 
