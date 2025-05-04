@@ -1127,9 +1127,9 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info, output_
             'hodographs': False
     }
     # Add user-selections to processing queue
-    if 'Surface placefiles': scripts_to_run['placefiles'] = True
-    if 'NSE placefiles': scripts_to_run['nse_placefiles'] = True
-    if 'Hodographs': scripts_to_run['hodographs'] = True
+    if 'Surface placefiles' in output_selections: scripts_to_run['placefiles'] = True
+    if 'NSE placefiles' in output_selections: scripts_to_run['nse_placefiles'] = True
+    if 'Hodographs' in output_selections: scripts_to_run['hodographs'] = True
     
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
