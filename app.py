@@ -1139,9 +1139,9 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         
         # For future use: add user overrides to skip certain scripts
         #######
-        scripts_to_run['placefiles'] = True
+        scripts_to_run['placefiles'] = False
         scripts_to_run['nse_placefiles'] = False
-        #scripts_to_run['hodographs'] = False
+        scripts_to_run['hodographs'] = False
         remove_files_and_dirs(configs)
 
         # If scripts previously completed, remove that status file
@@ -1252,42 +1252,93 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
 
 
 @app.callback(
-    [Output('radar_quantity', 'disabled', allow_duplicate=True), 
-    Output('map_btn', 'disabled', allow_duplicate=True), 
-    Output('new_radar_selection', 'disabled', allow_duplicate=True),
     Output('run_scripts_btn', 'disabled', allow_duplicate=True), 
-    Output('confirm_radars_btn', 'disabled', allow_duplicate=True), 
     Output('playback_btn', 'disabled', allow_duplicate=True), 
     Output('refresh_polling_btn', 'disabled', allow_duplicate=True), 
     Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),  
-    Output('change_time', 'disabled', allow_duplicate=True), 
     Output('cancel_scripts', 'disabled', allow_duplicate=True), 
-    Output('playback_btn', 'children', allow_duplicate=True)],
+    Output('playback_btn', 'children', allow_duplicate=True),
     Input('script_status_interval', 'n_intervals'),
     State('configs', 'data'),
+    State('radar_info', 'data'),
     prevent_initial_call=True
 )
-def button_control(_n, configs):
+def button_control(_n, configs, radar_info):
     status_file = f"{configs['DATA_DIR']}/script_status.txt"
     script_status = read_status_file(status_file)
-    trues = [True]*9
+
+    run_scripts_btn_disabled = no_update
+    playback_btn_disabled = no_update
+    refresh_polling_btn_disabled = no_update
+    pause_resume_playback_btn_disabled = no_update 
+    cancel_scripts_disabled = no_update
+    playback_btn_children = no_update 
+    #if script_status in ['startup', 'completed']:
+    #    run_scripts_btn_disabled = no_update
+    #    playback_btn_disabled = no_update
+    #    refresh_polling_btn_disabled = no_update
+    #    pause_resume_playback_btn_disabled = no_update 
+    #    cancel_scripts_disabled = no_update
+    #    playback_btn_children = no_update 
     if script_status == 'running':
-        ret = trues + [False, 'Launch Simulation']
-    elif script_status in ['cancelled', 'startup']:
-        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
+        run_scripts_btn_disabled = True
+        playback_btn_disabled = True
+        refresh_polling_btn_disabled = True
+        pause_resume_playback_btn_disabled = True
+        cancel_scripts_disabled = False
+        playback_btn_children = 'Launch Simulation'
     elif script_status == 'completed':
-        ret = [False]*7 + [True, False, True, 'Launch Simulation'] 
-    elif script_status == 'sim launched':
-        ret = no_update # Releases button control to the clock callbacks
-    else: 
-        ret = [False]*5 + [True]*3 +[False, True, 'Launch Simulation']
+        run_scripts_btn_disabled = False
+        playback_btn_disabled = False
+        refresh_polling_btn_disabled = False
+        pause_resume_playback_btn_disabled = True
+        cancel_scripts_disabled = True
+        playback_btn_children = 'Launch Simulation'
+    elif script_status == 'cancelled':
+        run_scripts_btn_disabled = False
+        playback_btn_disabled = True
+        refresh_polling_btn_disabled = True
+        pause_resume_playback_btn_disabled = True
+        cancel_scripts_disabled = True
+        playback_btn_children = 'Launch Simulation'
 
     # If scripts previously completed, allow polling refresh
     completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
     if completed_file.is_file() and script_status not in ['running', 'sim launched']:
-        ret[6] = False
+        refresh_polling_btn_disabled = False
 
-    return ret
+    # If user changes the # of radars, run scripts needs to be disabled until they
+    # finalize their new selection(s)
+    if 'radar_list' in radar_info:
+        if len(radar_info['radar_list']) != radar_info['number_of_radars']:
+            run_scripts_btn_disabled = True
+    '''
+    if script_status in ['startup', 'sim_launched']:
+        ret = no_update
+    elif script_status == 'running':
+        ret = [True, True, True, True, False, 'Launch Simulation']
+    elif script_status == 'cancelled':
+        ret = [False, True, True, True, True, 'Launch Simulation']
+    elif script_status == 'completed':
+        ret = [False, False, False, True, True, 'Launch Simulation']
+    #else: 
+    #    ret = []
+
+    # If scripts previously completed, allow polling refresh
+    completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+    if completed_file.is_file() and script_status not in ['running', 'sim launched']:
+        ret[1] = False
+
+    # If user changes the # of radars, run scripts needs to be disabled until they
+    # finalize their new selection(s)
+    if 'radar_list' in radar_info:
+        if len(radar_info['radar_list']) != radar_info['number_of_radars']:
+            ret[0] = True
+    '''
+    #return ret
+    return (run_scripts_btn_disabled, playback_btn_disabled, 
+            refresh_polling_btn_disabled, pause_resume_playback_btn_disabled, 
+            cancel_scripts_disabled, playback_btn_children)
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
 ################################################################################################
