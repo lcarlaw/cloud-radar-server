@@ -70,11 +70,6 @@ TIME_REGEX = "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
 log = logging.getLogger('werkzeug')  # 'werkzeug' is the logger used by Flask
 log.setLevel(logging.WARNING)  # You can set it to ERROR or CRITICAL as well
 
-"""
-Idea is to move all of these functions to some other utility file within the main dir
-to get them out of the app.
-"""
-
 
 def create_logfile(LOG_DIR):
     """
@@ -571,12 +566,8 @@ def generate_layout(layout_has_initialized, children, configs):
 
         new_items = dbc.Container([
             dcc.Interval(id='playback_timer', disabled=True, interval=15*1000),
-            # dcc.Store(id='tradar'),
             dcc.Store(id='dummy'),
             dcc.Store(id='playback_running_store', data=False),
-            dcc.Store(id='playback_start_store'),   # might be unused
-            dcc.Store(id='playback_end_store'),     # might be unused
-            dcc.Store(id='playback_clock_store'),   # might be unused
 
             dcc.Store(id='radar_info', data=radar_info),
             dcc.Store(id='sim_times'),
@@ -585,7 +576,6 @@ def generate_layout(layout_has_initialized, children, configs):
 
             # For app/script monitoring
             dcc.Interval(id='script_status_interval', interval=50),
-            #dcc.Store(id='scripts_running', data=False),
             dcc.Interval(id='directory_monitor', interval=2000),
             dcc.Store(id='monitor_store', data=monitor_store),
 
@@ -751,13 +741,13 @@ def transpose_radar(value, radar_quantity, radar_info):
     return radar_info
 
 ################################################################################################
-# ----------------------------- Run Scripts button  --------------------------------------------
+# ------------------------------- Miscellaneous/Helper Functions -------------------------------
 ################################################################################################
-
 
 def query_radar_files(cfg, radar_info, sim_times):
     """
-    Get the radar files from the AWS bucket. This is a preliminary step to build the progess bar.
+    Get the radar files from the AWS bucket. This is a preliminary step to build out
+    the progess bar.
     """
     # Need to reset the expected files dictionary with each call. Otherwise, if a user
     # cancels a request, the previously-requested files will still be in the dictionary.
@@ -767,7 +757,6 @@ def query_radar_files(cfg, radar_info, sim_times):
         radar = radar.upper()
         args = [radar, str(sim_times['event_start_str']), str(sim_times['event_duration']),
                 str(False), cfg['RADAR_DIR']]
-        # logging.info(f"{cfg['SESSION_ID']} :: Passing {args} to Nexrad.py")
         results = utils.exec_script(
             Path(cfg['NEXRAD_SCRIPT_PATH']), args, cfg['SESSION_ID'])
         if results['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
@@ -780,7 +769,7 @@ def query_radar_files(cfg, radar_info, sim_times):
             f"{cfg['SESSION_ID']} :: Nexrad.py returned with {json_data}")
         radar_info['radar_files_dict'].update(json.loads(json_data))
 
-    # Write radar metadata for this simulation to a text file. More complicated updating the
+    # Write radar metadata for this simulation to a text file. More complicated updating 
     # dcc.Store object with this information since this function isn't a callback.
     with open(f'{cfg['RADAR_DIR']}/radarinfo.json', 'w', encoding='utf-8') as json_file:
         json.dump(radar_info['radar_files_dict'], json_file)
@@ -803,12 +792,14 @@ def call_function(func, *args, **kwargs):
         )
     return result
 
+
 def write_status_file(value: str, filename: str):
     """
     For monitoring individual processing script status (can't rely on dcc.Store to
     update if function runs for more than the timeout interval).
     """
     with open(filename, 'w') as f: f.write(str(value))
+
 
 def read_status_file(filename: str):
     status = 'idle'
@@ -982,7 +973,6 @@ def generate_fast_placefiles(radar_info, configs, sim_times):
 
 def generate_events_files(configs, sim_times):
     # Always write an event times placefile, and events.txt and events.html output.
-    # --------- Event times placefiles ----------------------------------------------
     args = [str(sim_times['simulation_seconds_shift']), configs['DATA_DIR'], 
             configs['RADAR_DIR'], configs['EVENTS_HTML_PAGE'], 
             configs['EVENTS_TEXT_FILE']]
@@ -1048,15 +1038,6 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     """
     This function handles the execution of all processing scripts 
     """
-    log_string = (
-        f"\n"
-        f"=========================Simulation Settings========================\n"
-        f"Session ID: {configs['SESSION_ID']}\n"
-        f"{sim_times}\n"
-        f"{radar_info}\n"
-        f"====================================================================\n"
-    )
-    logging.info(log_string)
     status = 'running'
     create_radar_dict(radar_info)
     if scripts_to_run['query_and_download_radar']:
@@ -1106,7 +1087,7 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     State('output_selections', 'value'),
     prevent_initial_call=True,
 )
-def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info, output_selections):
+def coordinate_processing_scripts(sim_times, configs, radar_info, output_selections):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
     turn happens after either the run scripts or refresh polling buttons are clicked.  
@@ -1120,16 +1101,22 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info, output_
     
     button_source = sim_times.get('source')
     scripts_to_run = {
-            'query_and_download_radar': True,
-            'munger_radar': True,
-            'placefiles': False,
-            'nse_placefiles': False,
-            'hodographs': False
+        'query_and_download_radar': True,
+        'munger_radar': True,
+        'placefiles': False,
+        'nse_placefiles': False,
+        'hodographs': False
     }
-    # Add user-selections to processing queue
-    if 'Surface placefiles' in output_selections: scripts_to_run['placefiles'] = True
-    if 'NSE placefiles' in output_selections: scripts_to_run['nse_placefiles'] = True
-    if 'Hodographs' in output_selections: scripts_to_run['hodographs'] = True
+
+    # Add user selections to processing queue
+    output_mapping = {
+        'Surface placefiles': 'placefiles',
+        'NSE placefiles': 'nse_placefiles',
+        'Hodographs': 'hodographs',
+    }
+    for selection in output_selections:
+        key = output_mapping.get(selection)
+        if key: scripts_to_run[key] = True
     
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
@@ -1144,9 +1131,9 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info, output_
             #     print(f"Failed to send email: {e}")
         remove_files_and_dirs(configs)
 
-        # If scripts previously completed, remove that status file
+        # If scripts were previously completed, remove the status file
         completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
-        if completed_file.is_file():
+        if completed_file.is_file(): 
             completed_file.unlink()
 
     # Run the refresh polling scripts
@@ -1163,18 +1150,23 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info, output_
         logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
         raise PreventUpdate
     
-    # Run the processing scripts
+    write_status_file('running', f"{configs['DATA_DIR']}/script_status.txt")
     log_string = (
         f"\n"
-        f"***********************User output selections***********************\n"
+        f"=========================Simulation Settings========================\n"
         f"Session ID: {configs['SESSION_ID']}\n"
-        f"{scripts_to_run}\n"
-        f"********************************************************************\n"
+        f"Simulation settings: {sim_times}\n\n"
+        f"Radar info: {radar_info}\n\n"
+        f"Scripts settings: {scripts_to_run}\n"
+        f"====================================================================\n"
     )
     logging.info(log_string)
-    write_status_file('running', f"{configs['DATA_DIR']}/script_status.txt")
+
+    # Run the processing scripts
     status = run_scripts(scripts_to_run, sim_times, configs, radar_info)
+
     if status == 'running':
+        # If we're here, scripts ran to completion (were not cancelled)
         write_status_file('completed', f"{configs['DATA_DIR']}/script_status.txt")
         write_status_file('', f"{configs['DATA_DIR']}/completed.txt")
 
@@ -1267,7 +1259,9 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     logging.info(log_string)
     return sim_times
 
-
+################################################################################################
+# -----------------------------Internal button logic  ------------------------------------------
+################################################################################################
 @app.callback(
     Output('run_scripts_btn', 'disabled', allow_duplicate=True), 
     Output('playback_btn', 'disabled', allow_duplicate=True), 
@@ -1282,40 +1276,24 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     prevent_initial_call=True
 )
 def button_control(_n, configs, radar_info):
+    """
+    Coordinates activation and deactivation of clock and script-related buttons on the 
+    UI. This removes button control from the script processing callback due to issues 
+    with handling button release during long-running callbacks.
+    """
+    # Get script status from file. Will be: startup, running, cancelled, or sim launched
     status_file = f"{configs['DATA_DIR']}/script_status.txt"
     script_status = read_status_file(status_file)
 
-    # Base cases to handle initial app startup or actively-running simulation
-    run_scripts_btn_disabled = no_update
-    playback_btn_disabled = no_update
-    refresh_polling_btn_disabled = no_update
-    pause_resume_playback_btn_disabled = no_update 
-    cancel_scripts_disabled = no_update
-    playback_btn_children = no_update 
-    change_time_disabled = no_update 
-    if script_status == 'running':
-        run_scripts_btn_disabled = True
-        playback_btn_disabled = True
-        refresh_polling_btn_disabled = True
-        pause_resume_playback_btn_disabled = True
-        cancel_scripts_disabled = False
-        playback_btn_children = 'Launch Simulation'
-    elif script_status == 'completed':
-        run_scripts_btn_disabled = False
-        playback_btn_disabled = False
-        refresh_polling_btn_disabled = False
-        pause_resume_playback_btn_disabled = True
-        cancel_scripts_disabled = True
-        playback_btn_children = 'Launch Simulation'
-    elif script_status == 'cancelled':
-        run_scripts_btn_disabled = False
-        playback_btn_disabled = True
-        refresh_polling_btn_disabled = True
-        pause_resume_playback_btn_disabled = True
-        cancel_scripts_disabled = True
-        playback_btn_children = 'Launch Simulation'
-    elif script_status == 'sim launched':
-        change_time_disabled = False
+    (
+    run_scripts_btn_disabled,
+    playback_btn_disabled,
+    refresh_polling_btn_disabled,
+    pause_resume_playback_btn_disabled,
+    cancel_scripts_disabled,
+    playback_btn_children,
+    change_time_disabled
+    ) = update_button_states(script_status, no_update)
 
     # If scripts previously completed, allow polling refresh
     completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
@@ -1331,6 +1309,66 @@ def button_control(_n, configs, radar_info):
     return (run_scripts_btn_disabled, playback_btn_disabled, 
             refresh_polling_btn_disabled, pause_resume_playback_btn_disabled, 
             cancel_scripts_disabled, playback_btn_children, change_time_disabled)
+
+def update_button_states(script_status, no_update):
+    """
+    Helper function to button_control to map button states to script status.
+    """
+    # Default values
+    state = {
+        'run_scripts_btn_disabled': no_update,
+        'playback_btn_disabled': no_update,
+        'refresh_polling_btn_disabled': no_update,
+        'pause_resume_playback_btn_disabled': no_update,
+        'cancel_scripts_disabled': no_update,
+        'playback_btn_children': no_update,
+        'change_time_disabled': no_update
+    }
+
+    # Mapping of script_status to specific updates
+    status_updates = {
+        'running': {
+            'run_scripts_btn_disabled': True,
+            'playback_btn_disabled': True,
+            'refresh_polling_btn_disabled': True,
+            'pause_resume_playback_btn_disabled': True,
+            'cancel_scripts_disabled': False,
+            'playback_btn_children': 'Launch Simulation',
+        },
+        'completed': {
+            'run_scripts_btn_disabled': False,
+            'playback_btn_disabled': False,
+            'refresh_polling_btn_disabled': False,
+            'pause_resume_playback_btn_disabled': True,
+            'cancel_scripts_disabled': True,
+            'playback_btn_children': 'Launch Simulation',
+        },
+        'cancelled': {
+            'run_scripts_btn_disabled': False,
+            'playback_btn_disabled': True,
+            'refresh_polling_btn_disabled': True,
+            'pause_resume_playback_btn_disabled': True,
+            'cancel_scripts_disabled': True,
+            'playback_btn_children': 'Launch Simulation',
+        },
+        'sim launched': {
+            'change_time_disabled': False
+        }
+    }
+
+    # Apply updates for the given status
+    if script_status in status_updates:
+        state.update(status_updates[script_status])
+
+    return (
+        state['run_scripts_btn_disabled'],
+        state['playback_btn_disabled'],
+        state['refresh_polling_btn_disabled'],
+        state['pause_resume_playback_btn_disabled'],
+        state['cancel_scripts_disabled'],
+        state['playback_btn_children'],
+        state['change_time_disabled']
+    )
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
 ################################################################################################
@@ -1779,8 +1817,6 @@ def get_sim(yr, mo, dy, hr, mn, dur) -> str:
     """
     dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
     line = f'{dt.strftime("%Y-%m-%d %H:%M")}Z ____ {dur} minutes'
-    #sim_times = make_simulation_times(dt, dur)
-    #return line, sim_times
     return line
 
 
