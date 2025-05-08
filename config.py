@@ -27,9 +27,7 @@ if sys.platform.startswith('darwin'):
     CLOUD = False
     PLATFORM = 'DARWIN'
 if os.getlogin() == 'lee.carlaw':
-    parts = Path.cwd().parts
-    idx = parts.index('cloud-radar-server-dev')
-    BASE_DIR = Path(*parts[0:idx+1])
+    BASE_DIR = "/data/cloud-radar-server-dev"
     LINK_BASE = "http://localhost:8050/assets"
     CLOUD = False
     PLATFORM = 'CLOUD_DEV'
