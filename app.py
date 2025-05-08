@@ -382,6 +382,10 @@ def create_radar_dict(sa) -> dict:
     """
     Creates dictionary of radar sites and their metadata to be used in the simulation.
     """
+    if sa['number_of_radars'] != 1:
+        sa['new_radar'] = 'None'
+        sa['new_lat'] = None 
+        sa['new_lon'] = None
     for _i, radar in enumerate(sa['radar_list']):
         sa['lat'] = lc.df[lc.df['radar'] == radar]['lat'].values[0]
         sa['lon'] = lc.df[lc.df['radar'] == radar]['lon'].values[0]
