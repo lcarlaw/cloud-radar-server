@@ -2005,7 +2005,7 @@ if __name__ == '__main__':
                        dev_tools_hot_reload=False)
     else:
         if config.PLATFORM == 'DARWIN':
-            app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=False, 
+            app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=True, 
                            use_reloader=False, dev_tools_hot_reload=False)
         elif config.PLATFORM == 'CLOUD_DEV':
             app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=True, 
