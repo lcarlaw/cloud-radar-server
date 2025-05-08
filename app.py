@@ -1560,17 +1560,6 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
     Enables/disables interval component that elapses the playback time. User can only 
     click this button this once.
     """
-    # Report out the size of the dir.list files in the polling directory. This is done
-    # first just in case no radar directories are found (shouldn't happen, but just in case), 
-    # which would result in FileNotFoundErrors in UpdateDirList() calls.
-    dir_list_sizes = check_dirlist_sizes(cfg['POLLING_DIR'])
-    log_string = (
-        f"\n"
-        f"*************************Playback Launched**************************\n"
-        f"Session ID: {cfg['SESSION_ID']}\n"
-        f"dir.list sizes (in bytes): {dir_list_sizes}\n"
-    )
-    logging.info(log_string)
 
     playback_specs = {
         'playback_paused': False,
@@ -1610,8 +1599,14 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         refresh_polling_btn_disabled = True
         run_scripts_btn_disabled = True
 
+    # Report out the size of the dir.list files in the polling directory. This is done
+    # following UpdateDirList call. 
+    dir_list_sizes = check_dirlist_sizes(cfg['POLLING_DIR'])
     log_string = (
         f"\n"
+        f"*************************Playback Launched**************************\n"
+        f"Session ID: {cfg['SESSION_ID']}\n"
+        f"dir.list sizes (in bytes): {dir_list_sizes}\n"
         f"Start: {sim_times['playback_start_str']}, End: {sim_times['playback_end_str']}\n"
         f"Start dt: {sim_times['playback_start']}, End dt: {sim_times['playback_end']}\n"
         f"Launch Simulation Button Disabled?: {btn_disabled}\n"
