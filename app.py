@@ -382,10 +382,6 @@ def create_radar_dict(sa) -> dict:
     """
     Creates dictionary of radar sites and their metadata to be used in the simulation.
     """
-    if sa['number_of_radars'] != 1:
-        sa['new_radar'] = 'None'
-        sa['new_lat'] = None 
-        sa['new_lon'] = None
     for _i, radar in enumerate(sa['radar_list']):
         sa['lat'] = lc.df[lc.df['radar'] == radar]['lat'].values[0]
         sa['lon'] = lc.df[lc.df['radar'] == radar]['lon'].values[0]
@@ -632,6 +628,7 @@ def generate_layout(layout_has_initialized, children, configs):
     Output('confirm_radars_btn', 'children'),
     Output('confirm_radars_btn', 'disabled'),
     Output('radar_info', 'data'),
+    Output('new_radar_selection', 'value'),
     [Input('radar_quantity', 'value'),
      Input('graph', 'clickData'),
      State('radar_info', 'data')],
@@ -653,12 +650,15 @@ def display_click_data(quant_str: str, click_data: dict, radar_info: dict):
         radar_info['number_of_radars'] = int(quant_str[0:1])
         radar_info['radar_list'] = []
         radar_info['radar_dict'] = {}
-        return f'Use map to select {quant_str}', f'{select_action} selections', True, radar_info
+        radar_info['new_radar'] = 'None'
+        radar_info['new_lat'] = None 
+        radar_info['new_lon'] = None
+        return f'Use map to select {quant_str}', f'{select_action} selections', True, radar_info, 'None'
 
     try:
         radar = click_data['points'][0]['customdata']
     except (KeyError, IndexError, TypeError):
-        return 'No radar selected ...', f'{select_action} selections', True, radar_info
+        return 'No radar selected ...', f'{select_action} selections', True, radar_info, no_update
 
     if radar not in radar_info['radar_list']:
         radar_info['radar_list'].append(radar)
@@ -670,7 +670,7 @@ def display_click_data(quant_str: str, click_data: dict, radar_info: dict):
     radar_info['radar'] = radar
 
     listed_radars = ', '.join(radar_info['radar_list'])
-    return listed_radars, f'{select_action} selections', btn_deactivated, radar_info
+    return listed_radars, f'{select_action} selections', btn_deactivated, radar_info, no_update
 
 
 @app.callback(
