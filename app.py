@@ -575,7 +575,7 @@ def generate_layout(layout_has_initialized, children, configs):
             dcc.Store(id='playback_specs'),
 
             # For app/script monitoring
-            dcc.Interval(id='script_status_interval', interval=50),
+            dcc.Interval(id='script_status_interval', interval=250),
             dcc.Interval(id='directory_monitor', interval=2000),
             dcc.Store(id='monitor_store', data=monitor_store),
 
@@ -1118,6 +1118,7 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
         key = output_mapping.get(selection)
         if key: scripts_to_run[key] = True
     
+    create_radar_dict(radar_info)
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
         #if config.PLATFORM != 'WINDOWS':
@@ -1164,19 +1165,17 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
 
     # Run the processing scripts
     status = run_scripts(scripts_to_run, sim_times, configs, radar_info)
-
-    if status == 'running':
-        # If we're here, scripts ran to completion (were not cancelled)
-        write_status_file('completed', f"{configs['DATA_DIR']}/script_status.txt")
-        write_status_file('', f"{configs['DATA_DIR']}/completed.txt")
-
     log_string = (
         f"\n"
         f"*************************Scripts completed**************************\n"
         f"Session ID: {configs['SESSION_ID']}\n"
         f"********************************************************************\n"
     )
-    logging.info(log_string)
+    if status == 'running':
+        # If we're here, scripts ran to completion (were not cancelled)
+        write_status_file('completed', f"{configs['DATA_DIR']}/script_status.txt")
+        write_status_file('', f"{configs['DATA_DIR']}/completed.txt")
+        logging.info(log_string)
 
     return no_update
 
@@ -2003,6 +2002,9 @@ if __name__ == '__main__':
     else:
         if config.PLATFORM == 'DARWIN':
             app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=False, 
+                           use_reloader=False, dev_tools_hot_reload=False)
+        elif config.PLATFORM == 'CLOUD_DEV':
+            app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=True, 
                            use_reloader=False, dev_tools_hot_reload=False)
         else:
             app.run(debug=True, port=8050, threaded=True, dev_tools_hot_reload=False)
