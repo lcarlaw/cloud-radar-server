@@ -28,6 +28,7 @@ class LsrBase:
     event_duration: str     # duration of the simulation in minutes
     data_dir:       str     # directory with the LSR csv file
     output_dir:     str     # directory for the placefile
+    lsr_delay_str:  str     # whether to add a delay to lsrs or not ('True' or 'False')
 
 @dataclass
 class LsrCreator(LsrBase):
@@ -52,6 +53,8 @@ class LsrCreator(LsrBase):
         self.end_api = datetime.strftime(self.sim_end, '%Y-%m-%dT%H:%MZ')
 
         self.lsr_delay = 10
+        if self.lsr_delay_str == 'False': 
+            self.lsr_delay = 0
         self.lsr_duration = 20
         self.url = self.construct_lsr_request_str()
         # Download data, generate placefile, keep csv for future use
@@ -236,7 +239,8 @@ class LsrCreator(LsrBase):
 
 if __name__ == '__main__':
     if sys.platform.startswith('win'):
-        LsrCreator('42','-85','2024-05-07 22:00','120', os.getcwd(), os.getcwd())
+        LsrCreator('42','-85','2024-05-07 22:00','120', os.getcwd(), os.getcwd(), 'True')
     else:
         #lat, lon, event_start_str, duration, 'DATA_DIR', 'PLACEFILES_DIR
-        LsrCreator(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
+        LsrCreator(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6],
+                   sys.argv[7])

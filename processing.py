@@ -238,7 +238,7 @@ def munger_radar(radar_info, configs, sim_times):
     return status
 
 
-def generate_fast_placefiles(radar_info, configs, sim_times):
+def generate_fast_placefiles(radar_info, configs, sim_times, lsr_delay):
     """
     Handles processing of the fast placefiles
     """
@@ -246,7 +246,7 @@ def generate_fast_placefiles(radar_info, configs, sim_times):
     # --------- LSRs ----------------------------------------------------------------
     args = [str(radar_info['lat']), str(radar_info['lon']),
             str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            configs['DATA_DIR'], configs['PLACEFILES_DIR']]
+            configs['DATA_DIR'], configs['PLACEFILES_DIR'], str(lsr_delay)]
     res = call_function(utils.exec_script, Path(configs['LSR_SCRIPT_PATH']), args,
                         configs['SESSION_ID'])
     if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:

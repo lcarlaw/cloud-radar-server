@@ -441,7 +441,7 @@ def transpose_radar(value, radar_quantity, radar_info, output_selections):
 # ----------------------------- Processing Scripts  --------------------------------------------
 ################################################################################################
 
-def run_scripts(scripts_to_run, sim_times, configs, radar_info):
+def run_scripts(scripts_to_run, sim_times, configs, radar_info, lsr_delay):
     """
     This function handles the execution of all processing scripts 
     """
@@ -457,7 +457,8 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
 
     if scripts_to_run['placefiles'] and status == 'running':
         logging.info(f"Surface placefile status: {status}")
-        status = processing.generate_fast_placefiles(radar_info, configs, sim_times)
+        status = processing.generate_fast_placefiles(radar_info, configs, sim_times, 
+                                                     lsr_delay)
 
     # The events files are always updated
     if status == 'running':
@@ -492,12 +493,13 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     State('output_selections', 'options'),
     Input('output_selections', 'value')
 )
-def enable_disable_hodographs(output_options, output_selections):
+def enable_disable_outputs(output_options, output_selections):
     """
     If user selections "Original radar only" from the output checklist, disable hodograph
-    generation. Placefile generation is still ok and is left unchanged. 
+    generation and lsr delay. Placefile generation is still ok and is left unchanged. 
+
+    LSR delay is also disabled if surface placefiles are turned off.
     """
-    # Update the output selections checklist to enable/disable hodograph generation
     updated_output_options = []
     for element in output_options:
         if element['value'] == 'hodographs':
@@ -507,6 +509,16 @@ def enable_disable_hodographs(output_options, output_selections):
                     output_selections.remove('hodographs')
             else:
                 element['disabled'] = False 
+
+        if element['value'] == 'lsr_delay':
+            if 'placefiles' not in output_selections or \
+                'original_radar_only' in output_selections:
+                element['disabled'] = True
+                if 'lsr_delay' in output_selections: 
+                    output_selections.remove('lsr_delay')
+            else:
+                element['disabled'] = False 
+
         updated_output_options.append(element)
     return updated_output_options, output_selections
 
@@ -545,6 +557,10 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
     # Special case if user only wants the original radar data
     if 'original_radar_only' not in output_selections: 
         scripts_to_run['munger_radar'] = True 
+
+    lsr_delay = True
+    if 'lsr_delay' not in output_selections:
+        lsr_delay = False
 
     create_radar_dict(radar_info)
     # Run the regular pre-processing scripts
@@ -592,7 +608,7 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
     logging.info(log_string)
 
     # Run the processing scripts
-    status = run_scripts(scripts_to_run, sim_times, configs, radar_info)
+    status = run_scripts(scripts_to_run, sim_times, configs, radar_info, lsr_delay)
     log_string = (
         f"\n"
         f"*************************Scripts completed**************************\n"
@@ -734,8 +750,7 @@ def button_control(_n, configs, radar_info, output_selections):
         if len(radar_info['radar_list']) != radar_info['number_of_radars']:
             run_scripts_btn_disabled = True
 
-    # If user selected 'Original radar only', disable simulation running. Should we add 
-    # a modal to alert the user in this case?
+    # If user selected 'Original radar only', disable simulation running. 
     dir_list_sizes = utils.check_dirlist_sizes(configs['POLLING_DIR']) 
     if 'original_radar_only' in output_selections or sum(dir_list_sizes.values()) < 1:
         playback_btn_disabled = True 
