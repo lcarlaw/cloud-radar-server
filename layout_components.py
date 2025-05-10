@@ -279,7 +279,7 @@ output_selections = dbc.Col(
         dbc.Tooltip(NSE_TOOLTIP, target='nse_tip', placement='right'),
         dbc.Tooltip(HODOGRAPH_TOOLTIP, target='hodograph_tip', placement='right'),
         dbc.Tooltip(RADAR_TOOLTIP, target='radar_tip', placement='right'),
-    ], id='output_selections_div')
+    ], id='output_selections_div', style={'display': 'block'})
     ])
 )
 
