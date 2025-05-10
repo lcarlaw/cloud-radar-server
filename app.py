@@ -310,7 +310,7 @@ def generate_layout(layout_has_initialized, children, configs):
     Output('confirm_radars_btn', 'children'),
     Output('confirm_radars_btn', 'disabled'),
     Output('radar_info', 'data'),
-    Output('new_radar_selection', 'value'),
+    Output('new_radar_selection', 'value', allow_duplicate=True),
     [Input('radar_quantity', 'value'),
      Input('graph', 'clickData'),
      State('radar_info', 'data')],
@@ -408,6 +408,7 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict,
 
 @app.callback(
     Output('radar_info', 'data', allow_duplicate=True),
+    Output('new_radar_selection', 'value', allow_duplicate=True),
     [Input('new_radar_selection', 'value'),
      Input('radar_quantity', 'value'),
      State('radar_info', 'data'),
@@ -421,7 +422,8 @@ def transpose_radar(value, radar_quantity, radar_info, output_selections):
     Since we always evaluate "value" after every user selection, always set new_radar 
     initially to None.
     """
-    radar_info['new_radar'] = 'None'
+    new_radar = 'None'
+    radar_info['new_radar'] = new_radar
     radar_info['new_lat'] = None
     radar_info['new_lon'] = None
     radar_info['number_of_radars'] = int(radar_quantity[0:1])
@@ -433,7 +435,7 @@ def transpose_radar(value, radar_quantity, radar_info, output_selections):
                                       == new_radar]['lat'].values[0]
         radar_info['new_lon'] = lc.df[lc.df['radar']
                                       == new_radar]['lon'].values[0]
-    return radar_info
+    return radar_info, new_radar
 
 ################################################################################################
 # ----------------------------- Processing Scripts  --------------------------------------------
