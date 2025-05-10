@@ -226,10 +226,12 @@ def generate_layout(layout_has_initialized, children, configs):
 
                 dbc.Row(
                  [dbc.Col(dbc.ListGroupItem("Download Original Radar Files",
-                                href=f"{configs['LINK_BASE']}/downloads/original_radar_files.zip"),
+                                href=f"{configs['LINK_BASE']}/downloads/original_radar_files.zip",
+                                disabled=True, id="download_radar_link"),
                                 style={'color':lc.graphics_c},width=4),
                      dbc.Col(dbc.ListGroupItem("Download Original Unshifted Placefiles",
-                                href=f"{configs['LINK_BASE']}/downloads/original_placefiles.zip"),
+                                href=f"{configs['LINK_BASE']}/downloads/original_placefiles.zip",
+                                disabled=True, id="download_placefile_link"),
                                 style={'color':lc.graphics_c},width=4),
                      dbc.Col(dbc.ListGroupItem("Hodograph Creation Instructions",
                                 href="https://docs.google.com/document/d/1pRT0l27Zo3WusVnGS-nvJiQXcW3AkyJ91RH8gISqoDQ/edit", target="_blank"),
@@ -370,6 +372,9 @@ def toggle_map_display(map_n, confirm_n) -> dict:
         return {'display': 'none'}, 'Show Radar Map'
     return lc.map_section_style, 'Hide Radar Map'
 
+################################################################################################
+# ----------------------------- Transpose radar section  ---------------------------------------
+################################################################################################
 
 @app.callback(
     [Output('full_transpose_section_id', 'style'),
@@ -391,19 +396,15 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict,
     triggered_id = ctx.triggered_id
     if triggered_id == 'radar_quantity':
         return disp_none, disp_none, disp_none, True
-    if 'original_radar_only' in output_selections:
-        return lc.section_box_pad, {'display': 'block'}, disp_none, no_update
     if clicks > 0:
         if radar_info['number_of_radars'] == 1 and len(radar_info['radar_list']) == 1 and \
             'original_radar_only' not in output_selections:
             return lc.section_box_pad, disp_none, {'display': 'block'}, False
         else: 
-            return lc.section_box_pad, {'display': 'block'}, disp_none, no_update
+            return lc.section_box_pad, {'display': 'block'}, disp_none, False
+    if 'original_radar_only' in output_selections:
+        return lc.section_box_pad, {'display': 'block'}, disp_none, no_update
     return disp_none, {'display': 'block'}, disp_none, False
-
-################################################################################################
-# ----------------------------- Transpose radar section  ---------------------------------------
-################################################################################################
 
 
 @app.callback(
@@ -713,6 +714,8 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     Output('cancel_scripts', 'disabled', allow_duplicate=True), 
     Output('playback_btn', 'children', allow_duplicate=True),
     Output('change_time', 'disabled', allow_duplicate=True),
+    Output('download_radar_link', 'disabled'),
+    Output('download_placefile_link', 'disabled'),
     Input('script_status_interval', 'n_intervals'),
     State('configs', 'data'),
     State('radar_info', 'data'),
@@ -737,7 +740,7 @@ def button_control(_n, configs, radar_info, output_selections):
     cancel_scripts_disabled,
     playback_btn_children,
     change_time_disabled
-    ) = update_button_states(script_status, no_update)
+    ) = _update_button_states(script_status, no_update)
 
     # If scripts previously completed, allow polling refresh
     completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
@@ -757,11 +760,41 @@ def button_control(_n, configs, radar_info, output_selections):
         pause_resume_playback_btn_disabled = True 
         refresh_polling_btn_disabled = True 
 
+    # If .zip files are available, change link color and activate ListGroupItem
+    dl_radar_link_disabled, dl_placefile_link_disabled = _update_link_status(configs)
+    
     return (run_scripts_btn_disabled, playback_btn_disabled, 
             refresh_polling_btn_disabled, pause_resume_playback_btn_disabled, 
-            cancel_scripts_disabled, playback_btn_children, change_time_disabled)
+            cancel_scripts_disabled, playback_btn_children, change_time_disabled,
+            dl_radar_link_disabled, dl_placefile_link_disabled)
 
-def update_button_states(script_status, no_update):
+def _update_link_status(configs):
+    """
+    Helper function to button_control. If downloadable .zip file(s) exist(s), acivate
+    associated ListGroupItem. Empty zip files seem to be about 22 bytes, so this checks
+    for file sizes over 30 bytes. 
+    
+    This could be extended in the future to update text styling to better highlight 
+    availability, and handle all links--including polling location (which should be 
+    disabled for original radar-only download).
+    """
+    file_path = Path(f"{configs['USER_DOWNLOADS_DIR']}/original_radar_files.zip")
+    download_radar_link_disabled = True
+    #download_radar_link_style = {'color':lc.graphics_c}
+    if file_path.is_file() and file_path.stat().st_size > 30:
+        download_radar_link_disabled = False
+        #download_radar_link_style = {'color':'#06DB42'}
+
+    file_path = Path(f"{configs['USER_DOWNLOADS_DIR']}/original_placefiles.zip")
+    download_placefile_link_disabled = True
+    #download_placefile_link_style = {'color':lc.graphics_c}
+    if file_path.is_file() and file_path.stat().st_size > 30:
+        download_placefile_link_disabled = False
+        #download_placefile_link_style = {'color':'#06DB42'}
+    
+    return download_radar_link_disabled, download_placefile_link_disabled
+
+def _update_button_states(script_status, no_update):
     """
     Helper function to button_control to map button states to script status.
     """
