@@ -379,8 +379,10 @@ def toggle_map_display(map_n, confirm_n) -> dict:
      ], Input('confirm_radars_btn', 'n_clicks'),
     Input('radar_quantity', 'value'),
     State('radar_info', 'data'),
+    Input('output_selections', 'value'),
     prevent_initial_call=True)
-def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict) -> dict:
+def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict,
+                              output_selections: list) -> dict:
     """
     This will display the transpose section on the page if the user has selected a single radar.
     """
@@ -389,10 +391,15 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict) ->
     triggered_id = ctx.triggered_id
     if triggered_id == 'radar_quantity':
         return disp_none, disp_none, disp_none, True
+    if 'original_radar_only' in output_selections:
+        return lc.section_box_pad, {'display': 'block'}, disp_none, no_update
     if clicks > 0:
-        if radar_info['number_of_radars'] == 1 and len(radar_info['radar_list']) == 1:
+        if radar_info['number_of_radars'] == 1 and len(radar_info['radar_list']) == 1 and \
+            'original_radar_only' not in output_selections:
             return lc.section_box_pad, disp_none, {'display': 'block'}, False
-    return lc.section_box_pad, {'display': 'block'}, disp_none, False
+        else: 
+            return lc.section_box_pad, {'display': 'block'}, disp_none, no_update
+    return disp_none, {'display': 'block'}, disp_none, False
 
 ################################################################################################
 # ----------------------------- Transpose radar section  ---------------------------------------
@@ -403,10 +410,11 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict) ->
     Output('radar_info', 'data', allow_duplicate=True),
     [Input('new_radar_selection', 'value'),
      Input('radar_quantity', 'value'),
-     State('radar_info', 'data')],
+     State('radar_info', 'data'),
+     Input('output_selections', 'value')],
     prevent_initial_call=True
 )
-def transpose_radar(value, radar_quantity, radar_info):
+def transpose_radar(value, radar_quantity, radar_info, output_selections):
     """
     If a user switches from a selection BACK to "None", without this, the application 
     will not update new_radar to None. Instead, it'll be the previous selection.
@@ -417,7 +425,8 @@ def transpose_radar(value, radar_quantity, radar_info):
     radar_info['new_lat'] = None
     radar_info['new_lon'] = None
     radar_info['number_of_radars'] = int(radar_quantity[0:1])
-    if value != 'None' and radar_info['number_of_radars'] == 1:
+    if value != 'None' and radar_info['number_of_radars'] == 1 and \
+        'original_radar_only' not in output_selections:
         new_radar = value
         radar_info['new_radar'] = new_radar
         radar_info['new_lat'] = lc.df[lc.df['radar']
@@ -476,6 +485,30 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     return status
 
 @app.callback(
+    Output('output_selections', 'options'),
+    Output('output_selections', 'value'),
+    State('output_selections', 'options'),
+    Input('output_selections', 'value')
+)
+def enable_disable_hodographs(output_options, output_selections):
+    """
+    If user selections "Original radar only" from the output checklist, disable hodograph
+    generation. Placefile generation is still ok and is left unchanged. 
+    """
+    # Update the output selections checklist to enable/disable hodograph generation
+    updated_output_options = []
+    for element in output_options:
+        if element['value'] == 'hodographs':
+            if 'original_radar_only' in output_selections: 
+                element['disabled'] = True 
+                if 'hodographs' in output_selections: 
+                    output_selections.remove('hodographs')
+            else:
+                element['disabled'] = False 
+        updated_output_options.append(element)
+    return updated_output_options, output_selections
+
+@app.callback(
     Output('show_script_progress', 'children', allow_duplicate=True),
     Input('sim_times', 'data'),
     State('configs', 'data'),
@@ -498,22 +531,19 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
     button_source = sim_times.get('source')
     scripts_to_run = {
         'query_and_download_radar': True,
-        'munger_radar': True,
+        'munger_radar': False,
         'placefiles': False,
         'nse_placefiles': False,
         'hodographs': False
     }
 
-    # Add user selections to processing queue
-    output_mapping = {
-        'Surface placefiles': 'placefiles',
-        'NSE placefiles': 'nse_placefiles',
-        'Hodographs': 'hodographs',
-    }
     for selection in output_selections:
-        key = output_mapping.get(selection)
-        if key: scripts_to_run[key] = True
+        if selection: scripts_to_run[selection] = True
     
+    # Special case if user only wants the original radar data
+    if 'original_radar_only' not in output_selections: 
+        scripts_to_run['munger_radar'] = True 
+
     create_radar_dict(radar_info)
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
@@ -668,9 +698,10 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     Input('script_status_interval', 'n_intervals'),
     State('configs', 'data'),
     State('radar_info', 'data'),
+    State('output_selections', 'value'),
     prevent_initial_call=True
 )
-def button_control(_n, configs, radar_info):
+def button_control(_n, configs, radar_info, output_selections):
     """
     Coordinates activation and deactivation of clock and script-related buttons on the 
     UI. This removes button control from the script processing callback due to issues 
@@ -700,6 +731,14 @@ def button_control(_n, configs, radar_info):
     if 'radar_list' in radar_info:
         if len(radar_info['radar_list']) != radar_info['number_of_radars']:
             run_scripts_btn_disabled = True
+
+    # If user selected 'Original radar only', disable simulation running. Should we add 
+    # a modal to alert the user in this case?
+    dir_list_sizes = utils.check_dirlist_sizes(configs['POLLING_DIR']) 
+    if 'original_radar_only' in output_selections or sum(dir_list_sizes.values()) < 1:
+        playback_btn_disabled = True 
+        pause_resume_playback_btn_disabled = True 
+        refresh_polling_btn_disabled = True 
 
     return (run_scripts_btn_disabled, playback_btn_disabled, 
             refresh_polling_btn_disabled, pause_resume_playback_btn_disabled, 

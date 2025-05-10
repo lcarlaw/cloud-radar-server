@@ -230,11 +230,17 @@ step_minute = html.Div(children="Minute", style=time_headers)
 step_duration = html.Div(children="Duration", style=time_headers)
 
 # Not a time selection, but makes the most sense to include in this top section. 
+output_options = ['Surface placefiles', 'NSE placefiles', 'Hodographs', 'Original radar only']
+output_defaults = ['Surface placefiles']
 output_selections_header = html.Div(children="Outputs", style=time_headers)
 output_selections = dbc.Col(html.Div([output_selections_header, dcc.Checklist(
-                            ['Surface placefiles', 'NSE placefiles', 'Hodographs'],
-                            ['Surface placefiles'], id='output_selections')
-                    ]))
+                            options=[
+                                {'label': 'Surface placefiles', 'value': 'placefiles'},
+                                {'label': 'NSE placefiles', 'value': 'nse_placefiles'},
+                                {'label': 'Hodographs', 'value': 'hodographs'},
+                                {'label': 'Original radar only', 'value':'original_radar_only'},
+                            ],
+                            value=['placefiles'], id='output_selections')]))
 
 CONFIRM_TIMES_TEXT = "Confirm start time and duration"
 confirm_times_section = dbc.Col(
@@ -350,7 +356,10 @@ allow_transpose_section = dbc.Container(dbc.Container(
 # ----------------------------------------------------------------------------------------------
 # Skip transpose notificiation section displayed when more than one radar is selected
 # ----------------------------------------------------------------------------------------------
-STEP_SKIP_TRANSPOSE_TEXT = "Radar Transpose option skipped since more than one radar selected ..."
+STEP_SKIP_TRANSPOSE_TEXT = """
+    Radar Transpose option skipped: either more than one radar selected or 
+    'Original radar only' option selected...
+"""
 skip_transpose = dbc.Col(
     html.Div(children=STEP_SKIP_TRANSPOSE_TEXT, style=steps_center))
 skip_transpose_section = dbc.Container(dbc.Container(
