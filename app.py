@@ -503,13 +503,16 @@ def enable_disable_outputs(output_options, output_selections):
     """
     updated_output_options = []
     for element in output_options:
-        #if element['value'] == 'hodographs':
-        #    if 'original_radar_only' in output_selections: 
-        #        element['disabled'] = True 
-        #        if 'hodographs' in output_selections: 
-        #            output_selections.remove('hodographs')
-        #    else:
-        #        element['disabled'] = False 
+        # Disable hodographs if original radar only selected for now. We can turn these
+        # on once we add them as a downloadable zip file. Otherwise, user has no way of 
+        # accessing since sims are disabled for this case. 
+        if element['value'] == 'hodographs':
+            if 'original_radar_only' in output_selections: 
+                element['disabled'] = True 
+                if 'hodographs' in output_selections: 
+                    output_selections.remove('hodographs')
+            else:
+                element['disabled'] = False 
 
         if element['value'] == 'lsr_delay':
             if 'placefiles' not in output_selections or \
@@ -719,13 +722,27 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     Output('change_time', 'disabled', allow_duplicate=True),
     Output('download_radar_link', 'disabled'),
     Output('download_placefile_link', 'disabled'),
+    # Time and output selections
+    Output('start_year', 'disabled', allow_duplicate=True),
+    Output('start_month', 'disabled', allow_duplicate=True),
+    Output('start_day', 'disabled', allow_duplicate=True),
+    Output('start_hour', 'disabled', allow_duplicate=True),
+    Output('start_minute', 'disabled', allow_duplicate=True),
+    Output('duration', 'disabled', allow_duplicate=True),
+    Output('output_selections_div', 'style', allow_duplicate=True),
+    # Radar section
+    Output('radar_quantity', 'disabled', allow_duplicate=True),
+    Output('map_btn', 'disabled', allow_duplicate=True),
+    Output('confirm_radars_btn', 'disabled', allow_duplicate=True),
+    Output('new_radar_selection', 'disabled', allow_duplicate=True),
     Input('script_status_interval', 'n_intervals'),
     State('configs', 'data'),
     State('radar_info', 'data'),
     State('output_selections', 'value'),
+    State('playback_status', 'children'),
     prevent_initial_call=True
 )
-def button_control(_n, configs, radar_info, output_selections):
+def button_control(_n, configs, radar_info, output_selections, playback_status):
     """
     Coordinates activation and deactivation of clock and script-related buttons on the 
     UI. This removes button control from the script processing callback due to issues 
@@ -765,11 +782,52 @@ def button_control(_n, configs, radar_info, output_selections):
 
     # If .zip files are available, change link color and activate ListGroupItem
     dl_radar_link_disabled, dl_placefile_link_disabled = _update_link_status(configs)
+
+    # Disables user interaction w/ time and radar/map inputs while sim or scripts running
+    (year_disabled, month_disabled, day_disabled, hour_disabled, minute_disabled, 
+    duration_disabled, radar_quantity_disabled, map_btn_disabled, 
+    confirm_radars_btn_disabled, new_radar_selection_disabled, output_selection_display
+    ) = _update_ui_status(playback_status, script_status)
     
     return (run_scripts_btn_disabled, playback_btn_disabled, 
             refresh_polling_btn_disabled, pause_resume_playback_btn_disabled, 
             cancel_scripts_disabled, playback_btn_children, change_time_disabled,
-            dl_radar_link_disabled, dl_placefile_link_disabled)
+            dl_radar_link_disabled, dl_placefile_link_disabled, year_disabled, 
+            month_disabled, day_disabled, hour_disabled, minute_disabled, 
+            duration_disabled, output_selection_display, radar_quantity_disabled, 
+            map_btn_disabled, confirm_radars_btn_disabled, new_radar_selection_disabled)
+
+def _update_ui_status(playback_status, script_status):
+    """
+    Helper function to button_control. If simulation or processing scripts are running, 
+    disables ability for user to make changes to any inputs. 
+    """
+    # Initial default state (all enabled, output visible)
+    states = {
+        'year': False,
+        'month': False,
+        'day': False,
+        'hour': False,
+        'minute': False,
+        'duration': False,
+        'radar_quantity': False,
+        'map_btn': False,
+        'confirm_radars_btn': False,
+        'new_radar_selection': False
+    }
+    output_selection_display = {'display': 'block'}
+
+    if playback_status == 'Running' or script_status == 'running':
+        # Set all to True (disabled) and hide the output
+        for key in states:
+            states[key] = True
+        output_selection_display = {'display': 'none'}
+
+    return (
+        states['year'], states['month'], states['day'], states['hour'],states['minute'],
+        states['duration'], states['radar_quantity'], states['map_btn'], 
+        states['confirm_radars_btn'], states['new_radar_selection'], 
+        output_selection_display)
 
 def _update_link_status(configs):
     """

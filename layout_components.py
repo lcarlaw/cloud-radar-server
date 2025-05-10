@@ -238,16 +238,16 @@ placefiles are turned off or "Original radar only" is selected, this option is
 disabled."""
 NSE_TOOLTIP = "Generate near-storm environment placefiles."
 HODOGRAPH_TOOLTIP = """
-Generate hodograph images."""
+Generate hodograph images. Option is disabled if "Original radar only" is selected."""
 RADAR_TOOLTIP = """
 This option disables radar transposing and processes only the original radar files.
 Data will be available through the "Download Original Radar Files" link in the
-Facilitator Links section. Simulation playback controls and LSR delay options will
-all be disabled."""
+Facilitator Links section. Simulation playback controls, hodograph, and LSR delay 
+options will all be disabled."""
 output_selections_header = html.Div(children="Outputs", style=time_headers)
 output_selections = dbc.Col(
     html.Div([
-        output_selections_header,
+    output_selections_header, html.Div([
         dcc.Checklist(
             options=[
                 {
@@ -279,6 +279,7 @@ output_selections = dbc.Col(
         dbc.Tooltip(NSE_TOOLTIP, target='nse_tip', placement='right'),
         dbc.Tooltip(HODOGRAPH_TOOLTIP, target='hodograph_tip', placement='right'),
         dbc.Tooltip(RADAR_TOOLTIP, target='radar_tip', placement='right'),
+    ], id='output_selections_div')
     ])
 )
 
