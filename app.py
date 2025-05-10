@@ -503,13 +503,13 @@ def enable_disable_outputs(output_options, output_selections):
     """
     updated_output_options = []
     for element in output_options:
-        if element['value'] == 'hodographs':
-            if 'original_radar_only' in output_selections: 
-                element['disabled'] = True 
-                if 'hodographs' in output_selections: 
-                    output_selections.remove('hodographs')
-            else:
-                element['disabled'] = False 
+        #if element['value'] == 'hodographs':
+        #    if 'original_radar_only' in output_selections: 
+        #        element['disabled'] = True 
+        #        if 'hodographs' in output_selections: 
+        #            output_selections.remove('hodographs')
+        #    else:
+        #        element['disabled'] = False 
 
         if element['value'] == 'lsr_delay':
             if 'placefiles' not in output_selections or \
@@ -555,9 +555,12 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
     for selection in output_selections:
         if selection: scripts_to_run[selection] = True
     
-    # Special case if user only wants the original radar data
     if 'original_radar_only' not in output_selections: 
         scripts_to_run['munger_radar'] = True 
+    # Special case if user only wants the original radar data. This allows hodograph
+    # generation with the original date/time.
+    else:
+        sim_times['simulation_seconds_shift'] = 0
 
     lsr_delay = True
     if 'lsr_delay' not in output_selections:
@@ -958,7 +961,7 @@ def monitor(_n, cfg, cancel_btn_disabled, monitor_store):
         hodograph_completion = 0
         if len(radar_files) > 0:
             hodograph_completion = 100 * \
-                (num_hodograph_images / (2*len(radar_files)))
+                (num_hodograph_images / (2*len(radar_files[::2])))
 
         # NSE placefiles
         model_list, model_warning = utils.nse_status_checker(cfg['MODEL_DIR'])
