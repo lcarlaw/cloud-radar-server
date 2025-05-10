@@ -4,41 +4,25 @@ allows users to simulate radar operations, including the generation of radar dat
 hodographs. The application is designed to mimic the behavior of a radar system over a
 specified period, starting from a predefined date and time. It allows for the simulation of
 radar data generation, including the handling of time shifts and geographical coordinates.
-
 """
-# from flask import Flask, render_template
-import os
-import shutil
-import zipfile
-#import gzip
 
-import re
-import subprocess
+import os
 from pathlib import Path
 from glob import glob
 import time
 from datetime import datetime, timedelta, timezone
 import calendar
-import math
-import json
 import logging
 import mimetypes
-import signal
-import io
-import base64
 #import smtplib
 #from email.mime.text import MIMEText
 #from email.mime.multipart import MIMEMultipart
-import psutil
 import pytz
 import pandas as pd
 
-# from time import sleep
-from dash import Dash, html, Input, Output, dcc, ctx, State, no_update  # , callback
+from dash import Dash, html, Input, Output, dcc, ctx, State, no_update  
 from dash.exceptions import PreventUpdate
-# from dash import diskcache, DiskcacheManager, CeleryManager
-# from uuid import uuid4
-# import diskcache
+
 import numpy as np
 from botocore.client import Config
 # bootstrap is what helps styling for a better presentation
@@ -47,24 +31,16 @@ import config
 from config import app
 
 import layout_components as lc
-from scripts.obs_placefile import Mesowest
-from scripts.Nexrad import NexradDownloader
-from scripts.munger import Munger
 from scripts.update_dir_list import UpdateDirList
 from scripts.update_hodo_page import UpdateHodoHTML
 from scripts.update_placefiles import UpdatePlacefiles
-from scripts.nse import Nse
-
 import utils
+import processing
+import placefiles
+import times
+
 mimetypes.add_type("text/plain", ".cfg", True)
 mimetypes.add_type("text/plain", ".list", True)
-
-# Earth radius (km)
-R = 6_378_137
-
-# Regular expressions. First one finds lat/lon pairs, second finds the timestamps.
-LAT_LON_REGEX = "[0-9]{1,2}.[0-9]{1,100},[ ]{0,1}[|\\s-][0-9]{1,3}.[0-9]{1,100}"
-TIME_REGEX = "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
 
 # Stops flask from writing "POST /_dash-update-component HTTP/1.1" 200 to logs
 log = logging.getLogger('werkzeug')  # 'werkzeug' is the logger used by Flask
@@ -82,300 +58,6 @@ def create_logfile(LOG_DIR):
         format='%(levelname)s %(asctime)s :: %(message)s',
         datefmt="%Y-%m-%d %H:%M:%S"
     )
-
-
-def shift_placefiles(PLACEFILES_DIR, sim_times, radar_info) -> None:
-    """
-    # While the _shifted placefiles should be purged for each run, just ensure we're
-    # only querying the "original" placefiles to shift (exclude any with _shifted.txt)        
-    """
-    filenames = glob(f"{PLACEFILES_DIR}/*.txt")
-    filenames = [x for x in filenames if "shifted" not in x]
-    filenames = [x for x in filenames if "updated" not in x]
-    for file_ in filenames:
-        outfilename = f"{file_[0:file_.index('.txt')]}_shifted.txt"
-        outfile = open(outfilename, 'w', encoding='utf-8')
-        with open(file_, 'r', encoding='utf-8') as f:
-            data = f.readlines()
-
-        try:
-            for line in data:
-                new_line = line
-
-                if sim_times['simulation_seconds_shift'] is not None and \
-                        any(x in line for x in ['Valid', 'TimeRange', 'Time']):
-                    new_line = shift_time(
-                        line, sim_times['simulation_seconds_shift'])
-
-                # Shift this line in space. Only perform if both an original and
-                # transpose radar have been specified.
-                if radar_info['new_radar'] != 'None' and radar_info['radar'] is not None:
-                    regex = re.findall(LAT_LON_REGEX, line)
-                    if len(regex) > 0:
-                        idx = regex[0].index(',')
-                        plat, plon = float(regex[0][0:idx]), float(regex[0][idx+1:])
-                        lat_out, lon_out = move_point(plat, plon, radar_info['lat'],
-                                                      radar_info['lon'],
-                                                      radar_info['new_lat'],
-                                                      radar_info['new_lon'])
-                        new_line = line.replace(regex[0], f"{lat_out}, {lon_out}")
-                outfile.write(new_line)
-        except (IOError, ValueError, KeyError) as e:
-            outfile.truncate(0)
-            outfile.write(f"Errors shifting this placefile: {e}")
-        outfile.close()
-
-
-def shift_time(line: str, simulation_seconds_shift: int) -> str:
-    """
-    Shifts the time-associated lines in a placefile.
-    These look for 'Valid' and 'TimeRange'.
-    """
-    simulation_time_shift = timedelta(seconds=simulation_seconds_shift)
-    new_line = line
-    if 'Valid:' in line:
-        idx = line.find('Valid:')
-        # Leave off \n character
-        valid_timestring = line[idx+len('Valid:')+1:-1]
-        dt = datetime.strptime(valid_timestring, '%H:%MZ %a %b %d %Y')
-        new_validstring = datetime.strftime(dt + simulation_time_shift,
-                                            '%H:%MZ %a %b %d %Y')
-        new_line = line.replace(valid_timestring, new_validstring)
-
-    if 'TimeRange' in line:
-        regex = re.findall(TIME_REGEX, line)
-        dt = datetime.strptime(regex[0], '%Y-%m-%dT%H:%M:%SZ')
-        new_datestring_1 = datetime.strftime(dt + simulation_time_shift,
-                                             '%Y-%m-%dT%H:%M:%SZ')
-        dt = datetime.strptime(regex[1], '%Y-%m-%dT%H:%M:%SZ')
-        new_datestring_2 = datetime.strftime(dt + simulation_time_shift,
-                                             '%Y-%m-%dT%H:%M:%SZ')
-        new_line = line.replace(f"{regex[0]} {regex[1]}",
-                                f"{new_datestring_1} {new_datestring_2}")
-
-    # For LSR placefiles
-    if 'LSR Time' in line:
-        regex = re.findall(TIME_REGEX, line)
-        dt = datetime.strptime(regex[0], '%Y-%m-%dT%H:%M:%SZ')
-        new_datestring = datetime.strftime(dt + simulation_time_shift,
-                                           '%Y-%m-%dT%H:%M:%SZ')
-        new_line = line.replace(regex[0], new_datestring)
-
-    return new_line
-
-
-def move_point(plat, plon, lat, lon, new_radar_lat, new_radar_lon):
-    """
-    Shift placefiles to a different radar site. Maintains the original azimuth and range
-    from a specified RDA and applies it to a new radar location. 
-
-    Parameters:
-    -----------
-    plat: float 
-        Original placefile latitude
-    plon: float 
-        Original palcefile longitude
-
-    lat and lon is the lat/lon pair for the original radar 
-    new_lat and new_lon is for the transposed radar. These values are set in 
-    the transpose_radar function after a user makes a selection in the 
-    new_radar_selection dropdown. 
-
-    """
-    def _clamp(n, minimum, maximum):
-        """
-        Helper function to make sure we're not taking the square root of a negative 
-        number during the calculation of `c` below. 
-        """
-        return max(min(maximum, n), minimum)
-
-    # Compute the initial distance from the original radar location
-    phi1, phi2 = math.radians(lat), math.radians(plat)
-    d_phi = math.radians(plat - lat)
-    d_lambda = math.radians(plon - lon)
-
-    a = math.sin(d_phi/2)**2 + (math.cos(phi1) *
-                                math.cos(phi2) * math.sin(d_lambda/2)**2)
-    a = _clamp(a, 0, a)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-    d = R * c
-
-    # Compute the bearing
-    y = math.sin(d_lambda) * math.cos(phi2)
-    x = (math.cos(phi1) * math.sin(phi2)) - (math.sin(phi1) * math.cos(phi2) *
-                                             math.cos(d_lambda))
-    theta = math.atan2(y, x)
-    bearing = (math.degrees(theta) + 360) % 360
-
-    # Apply this distance and bearing to the new radar location
-    phi_new, lambda_new = math.radians(
-        new_radar_lat), math.radians(new_radar_lon)
-    phi_out = math.asin((math.sin(phi_new) * math.cos(d/R)) + (math.cos(phi_new) *
-                        math.sin(d/R) * math.cos(math.radians(bearing))))
-    lambda_out = lambda_new + math.atan2(math.sin(math.radians(bearing)) *
-                                         math.sin(d/R) * math.cos(phi_new),
-                                         math.cos(d/R) - math.sin(phi_new) * math.sin(phi_out))
-    return math.degrees(phi_out), math.degrees(lambda_out)
-
-
-def copy_grlevel2_cfg_file(cfg) -> None:
-    """
-    Ensures a grlevel2.cfg file is copied into the polling directory.
-    This file is required for GR2Analyst to poll for radar data.
-    """
-    source = f"{cfg['BASE_DIR']}/grlevel2.cfg"
-    destination = f"{cfg['POLLING_DIR']}/grlevel2.cfg"
-    try:
-        shutil.copyfile(source, destination)
-    except (FileNotFoundError, PermissionError) as e:
-        print(f"Error copying {source} to {destination}: {e}")
-
-
-def remove_files_and_dirs(cfg) -> None:
-    """
-    Cleans up files and directories from the previous simulation so these datasets
-    are not included in the current simulation.
-    """
-    dirs = [cfg['RADAR_DIR'], cfg['POLLING_DIR'], cfg['HODOGRAPHS_DIR'], cfg['MODEL_DIR'],
-            cfg['PLACEFILES_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['PROBSEVERE_DIR']]
-    for directory in dirs:
-        for root, dirs, files in os.walk(directory, topdown=False):
-            for name in files:
-                if name not in ['grlevel2.cfg', 'events.txt']:
-                    os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-
-    # Remove the original file_times.txt file. This will get re-created by munger.py
-    try:
-        os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
-    except FileNotFoundError:
-        pass
-
-
-def remove_munged_radar_files(cfg) -> None:
-    """
-    Removes uncompressed and 'munged' radar files within the /data/xx/radar directory 
-    after the pre-processing scripts have completed. These files are no longer needed 
-    as the appropriate files have been exported to the /assets/xx/polling directory. 
-    
-    #copies the original files to the user downloads directory so they can be
-    #downloaded by the user if desired.
-    """
-    regex_pattern = r'^(.{4})(\d{8})_(\d{6})$'
-    #raw_pattern = r'^(.{4})(\d{8})_(\d{6})_(V\d{2})$'
-    # Searches for filenames with either Vxx or .gz. Older radar files are gzipped.
-    #raw_pattern = r'^.{4}\d{8}_\d{6}(_V\d{2}|\.gz)$'
-    for root, _, files in os.walk(cfg['RADAR_DIR']):
-        if Path(root).name == 'downloads':
-            for name in files:
-                thisfile = os.path.join(root, name)
-                matched = re.match(regex_pattern, name)
-                #raw_matched = re.match(raw_pattern, name)
-                if matched or '.uncompressed' in name:
-                    os.remove(thisfile)
-                #if raw_matched:
-                #    shutil.copy2(thisfile, cfg['USER_DOWNLOADS_DIR'])
-
-def zip_downloadable_radar_files(cfg) -> None:
-    """
-    After all radar files have been processed and are ready for download, this function
-    zips up the radar files into the user downloads directory.
-    """
-    raw_pattern = r'^.{4}\d{8}_\d{6}(_V\d{2}|\.gz)$'
-    zip_filename = f"{cfg['USER_DOWNLOADS_DIR']}/original_radar_files.zip"
-    with zipfile.ZipFile(zip_filename, 'w') as zipf:
-        for root, _, files in os.walk(cfg['RADAR_DIR']):
-            for f in files: 
-                raw_matched = re.match(raw_pattern, f)
-                if raw_matched:
-                    file_path = os.path.join(root, f)
-                    zipf.write(file_path, f)
-    #shutil.make_archive(zip_filename, 'zip', cfg['USER_DOWNLOADS_DIR'])
-    #shutil.move(f"{zip_filename}.zip", f"{cfg['USER_DOWNLOADS_DIR']}/original_radar_files.zip")
-
-
-def zip_original_placefiles(cfg) -> None:
-    """
-    After the placefiles have been shifted and are ready for download, this function
-    zips up the original placefiles.
-    """
-    zip_filepath = f"{cfg['USER_DOWNLOADS_DIR']}/original_placefiles.zip"
-    with zipfile.ZipFile(zip_filepath, 'w') as zipf:
-        for root, _, files in os.walk(cfg['PLACEFILES_DIR']):
-            for file in files:
-                if 'txt' in file and 'updated' not in file and 'shifted' not in file:
-                    file_path = os.path.join(root, file)
-                    zipf.write(file_path, file)
-
-def date_time_string(dt) -> str:
-    """
-    Converts a datetime object to a string.
-    """
-    return datetime.strftime(dt, "%Y-%m-%d %H:%M")
-
-
-def make_simulation_times(event_start_time, event_duration) -> dict:
-    """
-    playback_end_time: datetime object
-        - set to current time then rounded down to nearest 15 min.
-    playback_start_time: datetime object
-        - the time the simulation starts.
-        - playback_end_time minus the event duration
-        - This is "recent enough" for GR2Analyst to poll data
-    playback_timer: datetime object
-        - the "current" displaced realtime during the playback
-    event_start_time: datetime object
-        - the historical time the actual event started.
-        - based on user inputs of the event start time
-    simulation_time_shift: timedelta object
-        the difference between the playback start time and the event start time
-    simulation_seconds_shift: int
-        the difference between the playback start time and the event start time in seconds
-
-    Variables ending with "_str" are the string representations of the datetime objects
-    """
-
-    now = datetime.now(pytz.utc).replace(second=0, microsecond=0)
-    playback_end = now - timedelta(minutes=now.minute % 15)
-    playback_end_str = date_time_string(playback_end)
-
-    playback_start = playback_end - timedelta(minutes=event_duration)
-    playback_start_str = date_time_string(playback_start)
-
-    # The playback clock is set to 10 minutes after the start of the simulation
-    playback_clock = playback_start + timedelta(seconds=600)
-    playback_clock_str = date_time_string(playback_clock)
-
-    # a timedelta object is not JSON serializable, so cannot be included in the output
-    # dictionary stored in the dcc.Store object. All references to simulation_time_shift
-    # will need to use the simulation_seconds_shift reference instead.
-    simulation_time_shift = playback_start - event_start_time
-    simulation_seconds_shift = round(simulation_time_shift.total_seconds())
-    event_start_str = date_time_string(event_start_time)
-    increment_list = []
-    for t in range(0, int(event_duration/5) + 1, 1):
-        new_time = playback_start + timedelta(seconds=t*300)
-        new_time_str = date_time_string(new_time)
-        increment_list.append(new_time_str)
-
-    playback_dropdown_dict = [
-        {'label': increment, 'value': increment} for increment in increment_list]
-
-    sim_times = {
-        'event_start_str': event_start_str,
-        'simulation_seconds_shift': simulation_seconds_shift,
-        'playback_start_str': playback_start_str,
-        'playback_start': playback_start,
-        'playback_end_str': playback_end_str,
-        'playback_end': playback_end,
-        'playback_clock_str': playback_clock_str,
-        'playback_clock': playback_clock,
-        'playback_dropdown_dict': playback_dropdown_dict,
-        'event_duration': event_duration
-    }
-
-    return sim_times
 
 
 def create_radar_dict(sa) -> dict:
@@ -480,7 +162,7 @@ def generate_layout(layout_has_initialized, children, configs):
 
         # Initialize the script status tracking file and purge completion file if 
         # it exists 
-        write_status_file('startup', f"{configs['DATA_DIR']}/script_status.txt")
+        utils.write_status_file('startup', f"{configs['DATA_DIR']}/script_status.txt")
         completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
         if completed_file.is_file():
             completed_file.unlink()
@@ -745,298 +427,8 @@ def transpose_radar(value, radar_quantity, radar_info):
     return radar_info
 
 ################################################################################################
-# ------------------------------- Miscellaneous/Helper Functions -------------------------------
-################################################################################################
-
-def query_radar_files(cfg, radar_info, sim_times):
-    """
-    Get the radar files from the AWS bucket. This is a preliminary step to build out
-    the progess bar.
-    """
-    # Need to reset the expected files dictionary with each call. Otherwise, if a user
-    # cancels a request, the previously-requested files will still be in the dictionary.
-    # radar_files_dict = {}
-    radar_info['radar_files_dict'] = {}
-    for _r, radar in enumerate(radar_info['radar_list']):
-        radar = radar.upper()
-        args = [radar, str(sim_times['event_start_str']), str(sim_times['event_duration']),
-                str(False), cfg['RADAR_DIR']]
-        results = utils.exec_script(
-            Path(cfg['NEXRAD_SCRIPT_PATH']), args, cfg['SESSION_ID'])
-        if results['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            logging.warning(
-                f"{cfg['SESSION_ID']} :: User cancelled query_radar_files()")
-            break
-
-        json_data = results['stdout'].decode('utf-8')
-        logging.info(
-            f"{cfg['SESSION_ID']} :: Nexrad.py returned with {json_data}")
-        radar_info['radar_files_dict'].update(json.loads(json_data))
-
-    # Write radar metadata for this simulation to a text file. More complicated updating 
-    # dcc.Store object with this information since this function isn't a callback.
-    with open(f'{cfg['RADAR_DIR']}/radarinfo.json', 'w', encoding='utf-8') as json_file:
-        json.dump(radar_info['radar_files_dict'], json_file)
-
-    return results
-
-
-def call_function(func, *args, **kwargs):
-    # For the main script calls
-    if len(args) > 2 and func.__name__ != 'query_radar_files':
-        logging.info(f"Sending {args[1]} to {args[0]}")
-
-    result = func(*args, **kwargs)
-
-    if len(result['stderr']) > 0:
-        logging.error(result['stderr'].decode('utf-8'))
-    if 'exception' in result:
-        logging.error(f"Exception {result['exception']} occurred in {
-                      func.__name__}"
-        )
-    return result
-
-
-def write_status_file(value: str, filename: str):
-    """
-    For monitoring individual processing script status (can't rely on dcc.Store to
-    update if function runs for more than the timeout interval).
-    """
-    with open(filename, 'w') as f: f.write(str(value))
-
-
-def read_status_file(filename: str):
-    status = 'idle'
-    try:
-        with open(filename, 'r') as f: 
-            status = f.read().strip().lower()
-    except Exception as e: 
-        pass 
-    return status
-
-################################################################################################
 # ----------------------------- Processing Scripts  --------------------------------------------
 ################################################################################################
-
-def query_and_download_radars(radar_info, configs, sim_times):
-    try:
-        #create_radar_dict(radar_info)
-        copy_grlevel2_cfg_file(configs)
-    except (IOError, ValueError, KeyError) as e:
-        logging.exception("Error creating radar dict or cfg file: %s",e,exc_info=True)
-
-    radar_list = radar_info.get('radar_list', [])
-    session_id = configs['SESSION_ID']
-    status = 'cancelled'
-
-    # Write the links html page. 
-    try:
-        args = [configs['LINK_BASE'], configs['LINKS_HTML_PAGE']]
-        res = call_function(utils.exec_script, Path(configs['LINKS_PAGE_SCRIPT_PATH']),
-                            args, session_id)
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-            return status
-    except Exception as e:
-        logging.exception("Error creating links.html page")
-        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-        return status
-
-    # Query all radar files
-    try:
-        res = call_function(query_radar_files, configs, radar_info, sim_times)
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            logging.warning("Query radar files was cancelled.")
-            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-            return status
-    except Exception as e:
-        logging.exception("Radar file query failed.")
-
-    # Download all radar files
-    for radar in radar_list:
-        radar = radar.upper()
-        logging.info(f"Downloading radar: {radar}")
-        args = [radar, str(sim_times['event_start_str']),
-                str(sim_times['event_duration']), str(True), configs['RADAR_DIR']]
-        try:
-            res = call_function(utils.exec_script, Path(configs['NEXRAD_SCRIPT_PATH']), 
-                                args, session_id)
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                logging.warning(f"Radar download for {radar} was cancelled.")
-                write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-                return status
-        except Exception as e:
-            logging.exception(f"Radar download failed for {radar}")
-
-    # Now that all radar files are in assets/{}/downloads dir, zip them up
-    try:
-        zip_downloadable_radar_files(configs)
-    except KeyError as e:
-        logging.exception("Error zipping radar files ", exc_info=True)
-
-    logging.info(f"Downloads completed for radars: {radar_list}")
-    status = 'running'
-    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-    return status
-
-
-def munger_radar(radar_info, configs, sim_times):
-    status = 'cancelled'
-    radar_list = radar_info.get('radar_list', [])
-    for radar in radar_list:
-        radar = radar.upper()  
-        try:
-            if radar_info['new_radar'] == 'None':
-                new_radar = radar
-            else:
-                new_radar = radar_info['new_radar'].upper()
-        except (IOError, ValueError, KeyError) as e:
-            logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-        args = [radar, str(sim_times['playback_start_str']), 
-                str(sim_times['event_duration']),
-                str(sim_times['simulation_seconds_shift']), configs['RADAR_DIR'],
-                configs['POLLING_DIR'], configs['USER_DOWNLOADS_DIR'], 
-                configs['L2MUNGER_FILEPATH'], configs['DEBZ_FILEPATH'],
-                new_radar]
-        res = call_function(utils.exec_script, Path(configs['MUNGER_SCRIPT_FILEPATH']),
-                            args, configs['SESSION_ID'])
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            logging.warning(f"Munging for {radar} was cancelled.")
-            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-            return status
-        
-        # this gives the user some radar data to poll while other scripts are running
-        try:
-            UpdateDirList(new_radar, 'None', configs['POLLING_DIR'], initialize=True)
-        except (IOError, ValueError, KeyError) as e:
-            print(f"Error with UpdateDirList: {e}")
-            logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
-        
-    # Delete the uncompressed/munged radar files from the data directory
-    try:
-        remove_munged_radar_files(configs)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-
-    status = 'running'
-    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-    return status
-
-
-def generate_fast_placefiles(radar_info, configs, sim_times):
-    status = 'cancelled'
-    # --------- LSRs ----------------------------------------------------------------
-    args = [str(radar_info['lat']), str(radar_info['lon']),
-            str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            configs['DATA_DIR'], configs['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(configs['LSR_SCRIPT_PATH']), args,
-                        configs['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        logging.warning("LSR placefile generation was cancelled.")
-        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-        return status
-
-    # --------- Surface observations placefiles -------------------------------------
-    args = [str(radar_info['lat']), str(radar_info['lon']),
-            sim_times['event_start_str'], str(sim_times['event_duration']),
-            configs['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(configs['OBS_SCRIPT_PATH']), args,
-                        configs['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        logging.warning("Surface observations placefile generation was cancelled.")
-        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-        return status
-    
-    # --------- ProbSevere download -------------------------------------------------
-    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            configs['PROBSEVERE_DIR']]
-    res = call_function(utils.exec_script, 
-                        Path(configs['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']),
-                        args, configs['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        logging.warning("ProbSevere download was cancelled.")
-        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-        return status
-    
-    # --------- ProbSevere placefiles -----------------------------------------------
-    args = [str(radar_info['lat']), str(radar_info['lon']), configs['PROBSEVERE_DIR'],
-            configs['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, 
-                        Path(configs['PROBSEVERE_PLACEFILE_SCRIPT_PATH']),
-                        args, configs['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        logging.warning("ProbSevere placefile generation was cancelled.")
-        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-        return status
-    
-    status = 'running'
-    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-    return status
-
-
-def generate_events_files(configs, sim_times):
-    # Always write an event times placefile, and events.txt and events.html output.
-    args = [str(sim_times['simulation_seconds_shift']), configs['DATA_DIR'], 
-            configs['RADAR_DIR'], configs['EVENTS_HTML_PAGE'], 
-            configs['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(configs['EVENT_TIMES_SCRIPT_PATH']), 
-                        args, configs['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        logging.warning("Events placefile generation was cancelled.")
-        write_status_file('cancelled', f"{configs['DATA_DIR']}/script_status.txt")
-        return 'cancelled'
-    
-    status = 'running'
-    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-    return status
-
-
-def generate_nse_placefiles(configs, sim_times):
-    status = 'cancelled'
-    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            configs['SCRIPTS_DIR'], configs['DATA_DIR'], configs['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(configs['NSE_SCRIPT_PATH']), args,
-                        configs['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-        return status
-        
-    status = 'running'
-    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-    return status
-
-
-def generate_hodographs(radar_info, configs, sim_times):
-    status = 'cancelled'
-    for radar, data in radar_info['radar_dict'].items():
-        try:
-            asos_one = data['asos_one']
-            asos_two = data['asos_two']
-        except KeyError as e:
-            logging.exception("Error getting radar metadata: ", exc_info=True)
-
-        # Execute hodograph script
-        args = [radar, radar_info['new_radar'], asos_one, asos_two,
-                str(sim_times['simulation_seconds_shift']), configs['RADAR_DIR'],
-                configs['HODOGRAPHS_DIR']]
-        res = call_function(utils.exec_script, Path(configs['HODO_SCRIPT_PATH']), 
-                            args, configs['SESSION_ID'])
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-            return status
-
-        try:
-            UpdateHodoHTML(
-                'None', configs['HODOGRAPHS_DIR'], configs['HODOGRAPHS_PAGE'])
-        except (IOError, ValueError, KeyError) as e:
-            print("Error updating hodo html: ", e)
-            logging.exception("Error updating hodo html: %s",e, exc_info=True)
-
-    status = 'running'
-    write_status_file(status, f"{configs['DATA_DIR']}/script_status.txt")
-    return status
-
 
 def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     """
@@ -1046,24 +438,24 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
     create_radar_dict(radar_info)
     if scripts_to_run['query_and_download_radar']:
         logging.info(f"Radar download status: {status}")
-        status = query_and_download_radars(radar_info, configs, sim_times)
+        status = processing.query_and_download_radars(radar_info, configs, sim_times)
 
     if scripts_to_run['munger_radar'] and status == 'running':
         logging.info(f"Radar mungering status: {status}")
-        status = munger_radar(radar_info, configs, sim_times)
+        status = processing.munger_radar(radar_info, configs, sim_times)
 
     if scripts_to_run['placefiles'] and status == 'running':
         logging.info(f"Surface placefile status: {status}")
-        status = generate_fast_placefiles(radar_info, configs, sim_times)
+        status = processing.generate_fast_placefiles(radar_info, configs, sim_times)
 
     # The events files are always updated
     if status == 'running':
         logging.info(f"Event files status: {status}")
-        status = generate_events_files(configs, sim_times)
+        status = processing.generate_events_files(configs, sim_times)
 
     if scripts_to_run['nse_placefiles'] and status == 'running':
         logging.info(f"NSE placefile status: {status}")
-        status = generate_nse_placefiles(configs, sim_times)
+        status = processing.generate_nse_placefiles(configs, sim_times)
 
     # There always is a timeshift with a simulation, so this script needs to
     # execute every time, even if a user doesn't select a radar to transpose to.
@@ -1073,13 +465,13 @@ def run_scripts(scripts_to_run, sim_times, configs, radar_info):
 
         # Zip placefiles up, even if user bypassed the nse placefile generation step.
         try:
-            zip_original_placefiles(configs)
+            placefiles.zip_original_placefiles(configs)
         except Exception as e:
             logging.exception("Error zipping original placefiles ", exc_info=True)
 
     if scripts_to_run['hodographs'] and status == 'running':
         logging.info(f"Hodograph status: {status}")
-        status = generate_hodographs(radar_info, configs, sim_times)
+        status = processing.generate_hodographs(radar_info, configs, sim_times)
         
     return status
 
@@ -1134,7 +526,7 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
             #     )
             # except (smtplib.SMTPException, ConnectionError) as e:
             #     print(f"Failed to send email: {e}")
-        remove_files_and_dirs(configs)
+        processing.remove_files_and_dirs(configs)
 
         # If scripts were previously completed, remove the status file
         completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
@@ -1155,7 +547,7 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
         logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
         raise PreventUpdate
     
-    write_status_file('running', f"{configs['DATA_DIR']}/script_status.txt")
+    utils.write_status_file('running', f"{configs['DATA_DIR']}/script_status.txt")
     log_string = (
         f"\n"
         f"=========================Simulation Settings========================\n"
@@ -1177,8 +569,8 @@ def coordinate_processing_scripts(sim_times, configs, radar_info, output_selecti
     )
     if status == 'running':
         # If we're here, scripts ran to completion (were not cancelled)
-        write_status_file('completed', f"{configs['DATA_DIR']}/script_status.txt")
-        write_status_file('', f"{configs['DATA_DIR']}/completed.txt")
+        utils.write_status_file('completed', f"{configs['DATA_DIR']}/script_status.txt")
+        utils.write_status_file('', f"{configs['DATA_DIR']}/completed.txt")
         logging.info(log_string)
 
     return no_update
@@ -1198,7 +590,7 @@ def prep_refresh_polling(configs):
     # canceled a previous refresh before mungering finishes, leaving orphaned .uncompressed
     # files in the radar data directory.
     try:
-        remove_munged_radar_files(configs)
+        processing.remove_munged_radar_files(configs)
     except KeyError as e:
         logging.exception("Error removing munged radar files ", exc_info=True)
 
@@ -1241,11 +633,11 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     triggered = ctx.triggered_id
     if triggered == 'run_scripts_btn':
         dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
-        sim_times = make_simulation_times(dt, dur)
+        sim_times = times.make_simulation_times(dt, dur)
     elif triggered == 'refresh_polling_btn' and current_sim_times:
         dt = datetime.strptime(current_sim_times['event_start_str'], "%Y-%m-%d %H:%M")
         dt = dt.replace(tzinfo=timezone.utc)
-        sim_times = make_simulation_times(dt, current_sim_times['event_duration'])
+        sim_times = times.make_simulation_times(dt, current_sim_times['event_duration'])
     else:
         raise PreventUpdate
 
@@ -1286,7 +678,7 @@ def button_control(_n, configs, radar_info):
     """
     # Get script status from file. Will be: startup, running, cancelled, or sim launched
     status_file = f"{configs['DATA_DIR']}/script_status.txt"
-    script_status = read_status_file(status_file)
+    script_status = utils.read_status_file(status_file)
 
     (
     run_scripts_btn_disabled,
@@ -1509,32 +901,16 @@ def monitor(_n, cfg, cancel_btn_disabled, monitor_store):
 # A time shift will always be applied in the case of a simulation. Determination of
 # whether to also perform a spatial shift occurrs within shift_placefiles where a check for
 # new_radar != None takes place.
-
-
 def run_transpose_script(PLACEFILES_DIR, sim_times, radar_info) -> None:
     """
     Wrapper function to the shift_placefiles script
     """
-    shift_placefiles(PLACEFILES_DIR, sim_times, radar_info)
+    placefiles.shift_placefiles(PLACEFILES_DIR, sim_times, radar_info)
 
 
 ################################################################################################
 # ----------------------------- Clock Callbacks  -----------------------------------------------
 ################################################################################################
-def check_dirlist_sizes(POLLING_DIR):      
-    """
-    Checks and returns the size of all dir.list files in the polling directory. 
-    """
-    base = Path(POLLING_DIR)
-    dir_list_files = list(base.glob("*/dir.list"))
-    dir_list_sizes = {}
-    for f in dir_list_files:
-        radar_name = f.parent.name
-        size = f.stat().st_size
-        dir_list_sizes[radar_name] = size
-    return dir_list_sizes
-
-
 @app.callback(
     Output('playback_btn', 'children'),
     Output('playback_btn', 'disabled'),
@@ -1601,7 +977,7 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
 
     # Report out the size of the dir.list files in the polling directory. This is done
     # following UpdateDirList call. 
-    dir_list_sizes = check_dirlist_sizes(cfg['POLLING_DIR'])
+    dir_list_sizes = utils.check_dirlist_sizes(cfg['POLLING_DIR'])
     log_string = (
         f"\n"
         f"*************************Playback Launched**************************\n"
@@ -1615,7 +991,7 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         f"********************************************************************\n"
     )
     logging.info(log_string)
-    write_status_file('sim launched', f"{cfg['DATA_DIR']}/script_status.txt")
+    utils.write_status_file('sim launched', f"{cfg['DATA_DIR']}/script_status.txt")
     return (btn_text, btn_disabled, False, playback_running, start, style, end, style, options,
             False, playback_specs, refresh_polling_btn_disabled, run_scripts_btn_disabled)
 
@@ -1682,8 +1058,7 @@ def manage_clock_(nclicks, _n_intervals, new_time, _playback_running, playback_s
                 tzinfo=timezone.utc)
 
         if specs['playback_clock'] < specs['playback_end']:
-            specs['playback_clock_str'] = date_time_string(
-                specs['playback_clock'])
+            specs['playback_clock_str'] = times.date_time_string(specs['playback_clock'])
             readout_time = datetime.strftime(
                 specs['playback_clock'], '%Y-%m-%d   %H:%M:%S')
             if config.PLATFORM != 'WINDOWS':
@@ -1834,133 +1209,6 @@ def update_day_dropdown(selected_year, selected_month):
 ################################################################################################
 # ----------------------------- Upload callback  -----------------------------------------------
 ################################################################################################
-
-def make_timerange_line(row) -> str:
-    """
-    This function creates the datetime string for the placefiles
-    """
-    date_str = row.get('utc_date',"")
-    hour = row.get('utc_hour',"")
-    minute = row.get('utc_minute',"")
-    delay =  row.get('delay_min',"")
-    # Handle missing hour or minute values
-    if pd.isna(hour):
-        hour = 0
-    if pd.isna(minute):
-        minute = 0
-    if pd.isna(delay):
-        delay = 0
-
-    # Combine the date, hour, and minute into a datetime object
-    datetime_str = f"{date_str} {int(hour):02d}:{int(minute):02d}"
-
-    orig_dtobj = datetime.strptime(datetime_str, '%m/%d/%Y %H:%M')
-
-    dtobj = orig_dtobj + timedelta(minutes=int(delay))
-    dtobj_end = dtobj + timedelta(minutes=10)
-
-    time_range_start = dtobj.strftime("%Y-%m-%dT%H:%M:%SZ")
-    time_range_end = dtobj_end.strftime("%Y-%m-%dT%H:%M:%SZ")
-    timerange_line = f"TimeRange: {time_range_start} {time_range_end}\n"
-
-    return timerange_line
-
-def create_remark(row) -> str:
-    """
-    This function creates the pop-up text for the placefiles
-    """
-    typetext= row.get('TYPETEXT',"")
-    qualifier = row.get('QUALIFIER',"")
-    mag = row.get('MAG',"")
-    mag_line = ""
-    #if magnitude == "nan" or magnitude == "No_Magnitude":
-    if mag in ("nan", "NO MAG", "NA", "No_Magnitude"):
-        mag_line = "No Magnitude given"
-    else:
-        if typetext == 'TSTM WND GST':
-            mag_line = f"Wind Gust: {mag} mph"
-        if typetext in ('HAIL'):
-            mag_line = f"Size: {mag} inches"
-        if typetext in ('RAIN', 'SNOW'):
-            mag_line = f"Accum: {mag} inches"
-    source = row.get('SOURCE',"")
-    #fake_rpt = row.get('fake_rpt',"")
-    remark = row.get('REMARK',"")
-    if remark in ("nan", "No_Comments", "M","NA", "NO MAG"):
-        remark_line = ""
-    if typetext == 'QUESTION':
-        remark_line = f'{typetext}\\nSource: {source}\\n{remark}\nEnd:\n\n'
-    else:
-        remark_line = f'{typetext}\\n{qualifier}\\n{mag_line}\\nSource: {source}\\n{remark}\nEnd:\n\n'
-    return remark_line
-
-
-def icon_value(event_type) -> int:
-    """
-    This function assigns an icon value based on the event type
-    """
-    #if event_type == 'VERIFIED':
-    if event_type in ('VERIFIED', 'MEASURED'):
-        return 1
-    if event_type in ('UNVERIFIED', 'ESTIMATED'):
-        return 2
-    if event_type == 'QUESTION':
-        return 3
-    return 3
-
-
-def make_events_placefile(contents, filename, cfg):
-    """
-    This function creates the Event Notification placefile for the radar simulation
-    """
-    top_section = 'RefreshSeconds: 5\
-    \nThreshold: 999\
-    \nTitle: Event Notifications -- for radar simulation\
-    \nColor: 255 200 255\
-    \nIconFile: 1, 50, 50, 25, 15, https://raw.githubusercontent.com/tjturnage/cloud-radar-server/main/assets/iconfiles/wessl-three.png\
-    \nIconFile: 2, 30, 30, 15, 10, https://raw.githubusercontent.com/tjturnage/cloud-radar-server/main/assets/iconfiles/wessl-three-small.png\
-    \nFont: 1, 11, 1, "Arial"\n\n'
-
-
-    _content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-
-    try:
-        if 'csv' in filename:
-            place_fout = open(f'{cfg['PLACEFILES_DIR']}/events.txt', 'w', encoding='utf-8')
-            #notifications_csv = open(f'{cfg['DATA_DIR']}/notifications.csv', 'w', encoding='utf-8')
-            events_csv = f'{cfg['DATA_DIR']}/events.csv'
-            place_fout.write("; RSSiC events file\n")
-            place_fout.write(top_section)
-            # Assume that the user uploaded a CSV file
-            df_orig = pd.read_csv(io.StringIO(decoded.decode('utf-8')), dtype=str)
-            df_orig.fillna("NA", inplace=True)
-            df = df_orig.loc[df_orig['TYPETEXT'] != 'NO EVENT']
-
-            df.to_csv(events_csv, index=False, encoding='utf-8')
-
-            for _index,row in df.iterrows():
-                try:
-                    lat = row.get('LAT',"")
-                    lon = row.get('LON',"")
-                    obj_line = f'Object: {lat},{lon}\n'
-
-                    tr_line = make_timerange_line(row)
-                    comments = create_remark(row)
-                    icon_code = icon_value(row.get('QUALIFIER',""))
-                    icon_line = f"Threshold: 999\nIcon: 0,0,0,2,{icon_code}, {comments}"
-                    place_fout.write(tr_line)
-                    place_fout.write(obj_line)
-                    place_fout.write(icon_line)
-                except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError) as e:
-                    return None, f"Error processing file: {e}"
-            place_fout.close()
-            return df, None
-        return None, f"Unsupported file type: {filename}"
-
-    except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError) as e:
-        return None, f"Error processing file: {e}"
-
 @app.callback(Output('show_upload_feedback', 'children'),
               [Input('upload-data', 'contents'),
               State('upload-data', 'filename'),
@@ -1973,7 +1221,7 @@ def update_output(contents, filename, configs, _sim_times):
     """
     if contents is not None:
         try:
-            _df, error = make_events_placefile(contents, filename, configs)
+            _df, error = placefiles.make_events_placefile(contents, filename, configs)
             if error:
                 return html.Div([html.H5(error)])
             return html.Div([
