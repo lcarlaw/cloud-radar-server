@@ -27,7 +27,9 @@ if sys.platform.startswith('darwin'):
     CLOUD = False
     PLATFORM = 'DARWIN'
 if os.getlogin() == 'lee.carlaw':
-    BASE_DIR = "/data/scripts/lcarlaw/cloud-radar-server"
+    parts = Path.cwd().parts
+    idx = parts.index('cloud-radar-server')
+    BASE_DIR = Path(*parts[0:idx+1])
     LINK_BASE = "https://rssic-dev.nws.noaa.gov/assets"
     CLOUD = False
     PLATFORM = 'CLOUD_DEV'

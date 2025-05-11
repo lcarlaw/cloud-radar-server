@@ -248,7 +248,18 @@ def generate_layout(layout_has_initialized, children, configs):
                     links_section
                 ]), id="placefiles_section", style=lc.section_box_pad))
 
+        MODAL_TEXT = """
+            A change to one of the inputs has been detected after previously running the
+            processing scripts. You will need to click the Run Scripts button again to 
+            regenerate data for your simulation. All sim clock buttons will be disabled.
+        """
         new_items = dbc.Container([
+            dbc.Modal(
+                [dbc.ModalHeader(dbc.ModalTitle("Alert!")), dbc.ModalBody(MODAL_TEXT)],
+                id='input_change_modal', size='lg', is_open=False, style={'font-size':'20px'},
+            ),
+            dcc.Store(id='modal_count', data=0),
+            dcc.Store(id='disable_sim_flag', data=False),
             dcc.Interval(id='playback_timer', disabled=True, interval=15*1000),
             dcc.Store(id='dummy'),
             dcc.Store(id='playback_running_store', data=False),
@@ -259,7 +270,7 @@ def generate_layout(layout_has_initialized, children, configs):
             dcc.Store(id='playback_specs'),
 
             # For app/script monitoring
-            dcc.Interval(id='script_status_interval', interval=250),
+            dcc.Interval(id='script_status_interval', interval=1000),
             dcc.Interval(id='directory_monitor', interval=2000),
             dcc.Store(id='monitor_store', data=monitor_store),
 
@@ -390,6 +401,7 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict,
                               output_selections: list) -> dict:
     """
     This will display the transpose section on the page if the user has selected a single radar.
+    Also handles changes to the output selections--if original radar only is selected or not.
     """
     disp_none = {'display': 'none'}
     # script_style = {'padding': '1em', 'vertical-align': 'middle'}
@@ -402,8 +414,15 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict,
             return lc.section_box_pad, disp_none, {'display': 'block'}, False
         else: 
             return lc.section_box_pad, {'display': 'block'}, disp_none, False
-    if 'original_radar_only' in output_selections:
-        return lc.section_box_pad, {'display': 'block'}, disp_none, no_update
+    
+    # This needs to be last, otherwise run scripts button won't activate if this option
+    # is selected prior to making radar selections. Additional checking so that clicking 
+    # original radar doesn't result in Run scripts briefly becoming clickable each time.
+    if triggered_id == 'output_selections':
+        if 'original_radar_only' in output_selections:
+            return no_update, no_update, no_update, no_update
+        else:
+            return disp_none, {'display': 'block'}, disp_none, True
     return disp_none, {'display': 'block'}, disp_none, False
 
 
@@ -667,6 +686,7 @@ def prep_refresh_polling(configs):
 
 @app.callback(
     Output('sim_times', 'data'),
+    Output('disable_sim_flag', 'data', allow_duplicate=True),
      [Input('run_scripts_btn', 'n_clicks'),
       Input('refresh_polling_btn', 'n_clicks'),
      State('start_year', 'value'),
@@ -707,7 +727,11 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
         f"====================================================================\n"
     )
     logging.info(log_string)
-    return sim_times
+
+    # Always reset this flag, which could be True due to user changing input(s) after 
+    # processing scripts completed. See raise_modal_alert. 
+    disable_sim_flag = False
+    return sim_times, disable_sim_flag
 
 ################################################################################################
 # -----------------------------Internal button logic  ------------------------------------------
@@ -740,13 +764,20 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     State('radar_info', 'data'),
     State('output_selections', 'value'),
     State('playback_status', 'children'),
+    State('disable_sim_flag', 'data'),
     prevent_initial_call=True
 )
-def button_control(_n, configs, radar_info, output_selections, playback_status):
+def button_control(_n, configs, radar_info, output_selections, playback_status,
+                   disable_sim_flag):
     """
     Coordinates activation and deactivation of clock and script-related buttons on the 
     UI. This removes button control from the script processing callback due to issues 
     with handling button release during long-running callbacks.
+
+    Note: disable_sim_flag is set by raise_modal_alert. It's reset to False when
+    either run scripts or refresh polling are clicked. This is mean to inhibit a user 
+    from trying to run a sim with changed inputs, which could cause issues on the backend
+    that aren't broadcast to the user.
     """
     # Get script status from file. Will be: startup, running, cancelled, or sim launched
     status_file = f"{configs['DATA_DIR']}/script_status.txt"
@@ -760,11 +791,12 @@ def button_control(_n, configs, radar_info, output_selections, playback_status):
     cancel_scripts_disabled,
     playback_btn_children,
     change_time_disabled
-    ) = _update_button_states(script_status, no_update)
+    ) = _update_button_states(script_status, disable_sim_flag)
 
-    # If scripts previously completed, allow polling refresh
+    # If scripts previously completed, allow polling refresh.
     completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
-    if completed_file.is_file() and script_status not in ['running', 'sim launched']:
+    if completed_file.is_file() and script_status not in ['running', 'sim launched'] \
+        and not disable_sim_flag:
         refresh_polling_btn_disabled = False
 
     # If user changes the # of radars, run scripts needs to be disabled until they
@@ -855,7 +887,7 @@ def _update_link_status(configs):
     
     return download_radar_link_disabled, download_placefile_link_disabled
 
-def _update_button_states(script_status, no_update):
+def _update_button_states(script_status, disable_sim_flag):
     """
     Helper function to button_control to map button states to script status.
     """
@@ -905,6 +937,13 @@ def _update_button_states(script_status, no_update):
     if script_status in status_updates:
         state.update(status_updates[script_status])
 
+    # If user changed an input after script completion, raise_modal_alert will set 
+    # disable_sim_flag to True, signaling the sim buttons should be disabled.
+    if disable_sim_flag:
+        state['playback_btn_disabled'] = True
+        state['pause_resume_playback_btn_disabled'] = True
+        state['refresh_polling_btn_disabled'] = True
+    
     return (
         state['run_scripts_btn_disabled'],
         state['playback_btn_disabled'],
@@ -917,6 +956,42 @@ def _update_button_states(script_status, no_update):
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
 ################################################################################################
+@app.callback(
+    Output('input_change_modal', 'is_open'),
+    Output('modal_count', 'data'),
+    Output('disable_sim_flag', 'data', allow_duplicate=True),
+    Input('start_year', 'value'),
+    Input('start_month', 'value'),
+    Input('start_day', 'value'),
+    Input('start_hour', 'value'),
+    Input('start_minute', 'value'),
+    Input('duration', 'value'),
+    Input('output_selections', 'value'),
+    Input('radar_quantity', 'value'),
+    Input('graph', 'clickData'),
+    Input('new_radar_selection', 'value'),
+    State('configs', 'data'),
+    State('modal_count', 'data'),
+    prevent_initial_call=True
+)
+def raise_modal_alert(yr, mo, dy, hr, mn, dur, outputs, num_radars, graph_click, 
+                      new_radar, configs, modal_count):
+    """
+    If user makes a change to any of the inputs following completion of processing 
+    scripts, serve an alert modal indicating that all simulation clock buttons will be
+    disabled until processing scripts are run again. Function sets disable_sim_flag to 
+    True, which is then picked up by the button monitoring interval to make the changes
+    to the clock/sim playback buttons.
+
+    This only happens if original_radar_only is not selected. This modal will also only
+    appear once per session. 
+    """
+    completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+    if completed_file.is_file() and 'original_radar_only' not in outputs \
+        and modal_count == 0:
+        modal_count += 1
+        return True, modal_count, True
+    return no_update, modal_count, True
 
 
 @app.callback(
