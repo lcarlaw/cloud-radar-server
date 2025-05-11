@@ -409,7 +409,7 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict,
 
 @app.callback(
     Output('radar_info', 'data', allow_duplicate=True),
-    Output('new_radar_selection', 'value', allow_duplicate=True),
+    #Output('new_radar_selection', 'value', allow_duplicate=True),
     [Input('new_radar_selection', 'value'),
      Input('radar_quantity', 'value'),
      State('radar_info', 'data'),
@@ -423,8 +423,8 @@ def transpose_radar(value, radar_quantity, radar_info, output_selections):
     Since we always evaluate "value" after every user selection, always set new_radar 
     initially to None.
     """
-    new_radar = 'None'
-    radar_info['new_radar'] = new_radar
+    #new_radar = 'None'
+    radar_info['new_radar'] = 'None'
     radar_info['new_lat'] = None
     radar_info['new_lon'] = None
     radar_info['number_of_radars'] = int(radar_quantity[0:1])
@@ -436,7 +436,7 @@ def transpose_radar(value, radar_quantity, radar_info, output_selections):
                                       == new_radar]['lat'].values[0]
         radar_info['new_lon'] = lc.df[lc.df['radar']
                                       == new_radar]['lon'].values[0]
-    return radar_info, new_radar
+    return radar_info
 
 ################################################################################################
 # ----------------------------- Processing Scripts  --------------------------------------------
