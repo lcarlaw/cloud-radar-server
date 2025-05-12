@@ -271,7 +271,7 @@ def generate_layout(layout_has_initialized, children, configs):
 
             # For app/script monitoring
             dcc.Interval(id='script_status_interval', interval=1000),
-            dcc.Interval(id='directory_monitor', interval=2000),
+            dcc.Interval(id='directory_monitor', interval=2000, disabled=True),
             dcc.Store(id='monitor_store', data=monitor_store),
 
             lc.top_section, lc.top_banner,
@@ -687,6 +687,8 @@ def prep_refresh_polling(configs):
 @app.callback(
     Output('sim_times', 'data'),
     Output('disable_sim_flag', 'data', allow_duplicate=True),
+    Output('directory_monitor', 'disabled', allow_duplicate=True),
+    Output('modal_count', 'data', allow_duplicate=True),
      [Input('run_scripts_btn', 'n_clicks'),
       Input('refresh_polling_btn', 'n_clicks'),
      State('start_year', 'value'),
@@ -731,7 +733,10 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     # Always reset this flag, which could be True due to user changing input(s) after 
     # processing scripts completed. See raise_modal_alert. 
     disable_sim_flag = False
-    return sim_times, disable_sim_flag
+
+    # Start the directory monitoring interval 
+    monitor_disabled = False 
+    return sim_times, disable_sim_flag, monitor_disabled, 0
 
 ################################################################################################
 # -----------------------------Internal button logic  ------------------------------------------
@@ -759,6 +764,9 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     Output('map_btn', 'disabled'),
     Output('confirm_radars_btn', 'disabled', allow_duplicate=True),
     Output('new_radar_selection', 'disabled', allow_duplicate=True),
+    # Interval components
+    Output('directory_monitor', 'disabled', allow_duplicate=True),  
+    Output('show_script_progress', 'children', allow_duplicate=True),
     Input('script_status_interval', 'n_intervals'),
     State('configs', 'data'),
     State('radar_info', 'data'),
@@ -779,6 +787,9 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
     from trying to run a sim with changed inputs, which could cause issues on the backend
     that aren't broadcast to the user.
     """
+    monitor_disabled = False 
+    screen_output = no_update
+
     # Get script status from file. Will be: startup, running, cancelled, or sim launched
     status_file = f"{configs['DATA_DIR']}/script_status.txt"
     script_status = utils.read_status_file(status_file)
@@ -799,6 +810,13 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
         and not disable_sim_flag:
         refresh_polling_btn_disabled = False
 
+    if script_status != 'running':
+        monitor_disabled = True
+        screen_output = "" # So the last script status is purged from the display
+    
+    #if script_status not in ['running', 'sim launched']:
+    #    script_interval_disabled = True
+
     # If user changes the # of radars, run scripts needs to be disabled until they
     # finalize their new selection(s)
     if 'radar_list' in radar_info:
@@ -806,11 +824,13 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
             run_scripts_btn_disabled = True
 
     # If user selected 'Original radar only', disable simulation running. 
-    dir_list_sizes = utils.check_dirlist_sizes(configs['POLLING_DIR']) 
-    if 'original_radar_only' in output_selections or sum(dir_list_sizes.values()) < 1:
+    #dir_list_sizes = utils.check_dirlist_sizes(configs['POLLING_DIR']) 
+    #if 'original_radar_only' in output_selections or sum(dir_list_sizes.values()) < 1:
+    if 'original_radar_only' in output_selections:
         playback_btn_disabled = True 
         pause_resume_playback_btn_disabled = True 
         refresh_polling_btn_disabled = True 
+        change_time_disabled = True
 
     # If .zip files are available, change link color and activate ListGroupItem
     dl_radar_link_disabled, dl_placefile_link_disabled = _update_link_status(configs)
@@ -827,7 +847,8 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
             dl_radar_link_disabled, dl_placefile_link_disabled, year_disabled, 
             month_disabled, day_disabled, hour_disabled, minute_disabled, 
             duration_disabled, output_selection_display, radar_quantity_disabled, 
-            map_btn_disabled, confirm_radars_btn_disabled, new_radar_selection_disabled)
+            map_btn_disabled, confirm_radars_btn_disabled, new_radar_selection_disabled,
+            monitor_disabled, screen_output)
 
 def _update_ui_status(playback_status, script_status):
     """
@@ -943,6 +964,7 @@ def _update_button_states(script_status, disable_sim_flag):
         state['playback_btn_disabled'] = True
         state['pause_resume_playback_btn_disabled'] = True
         state['refresh_polling_btn_disabled'] = True
+        state['change_time'] = True
     
     return (
         state['run_scripts_btn_disabled'],
@@ -983,15 +1005,22 @@ def raise_modal_alert(yr, mo, dy, hr, mn, dur, outputs, num_radars, graph_click,
     True, which is then picked up by the button monitoring interval to make the changes
     to the clock/sim playback buttons.
 
-    This only happens if original_radar_only is not selected. This modal will also only
-    appear once per session. 
+    This only happens if original_radar_only is not selected and if the simulation hasn't
+    already been launched. In this latter case, all of the simulation-dependent items 
+    seem to be stored in the local playback_specs store object.
+
+    This modal will appear once between each run scripts/refresh polling click. 
     """
     completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+    script_status = utils.read_status_file(f"{configs['DATA_DIR']}/script_status.txt")
     if completed_file.is_file() and 'original_radar_only' not in outputs \
-        and modal_count == 0:
+        and script_status != 'sim launched':
         modal_count += 1
-        return True, modal_count, True
-    return no_update, modal_count, True
+        if modal_count == 1:
+            return True, modal_count, True
+        else:
+            return no_update, modal_count, True
+    return no_update, modal_count, no_update
 
 
 @app.callback(
