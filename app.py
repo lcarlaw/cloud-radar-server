@@ -749,6 +749,7 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     Output('cancel_scripts', 'disabled', allow_duplicate=True), 
     Output('playback_btn', 'children', allow_duplicate=True),
     Output('change_time', 'disabled', allow_duplicate=True),
+    Output('speed_dropdown', 'disabled', allow_duplicate=True),
     Output('download_radar_link', 'disabled'),
     Output('download_placefile_link', 'disabled'),
     # Time and output selections
@@ -801,7 +802,8 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
     pause_resume_playback_btn_disabled,
     cancel_scripts_disabled,
     playback_btn_children,
-    change_time_disabled
+    change_time_disabled,
+    change_speed_disabled
     ) = _update_button_states(script_status, disable_sim_flag)
 
     # If scripts previously completed, allow polling refresh.
@@ -843,7 +845,7 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
     
     return (run_scripts_btn_disabled, playback_btn_disabled, 
             refresh_polling_btn_disabled, pause_resume_playback_btn_disabled, 
-            cancel_scripts_disabled, playback_btn_children, change_time_disabled,
+            cancel_scripts_disabled, playback_btn_children, change_time_disabled, change_speed_disabled,
             dl_radar_link_disabled, dl_placefile_link_disabled, year_disabled, 
             month_disabled, day_disabled, hour_disabled, minute_disabled, 
             duration_disabled, output_selection_display, radar_quantity_disabled, 
@@ -920,7 +922,8 @@ def _update_button_states(script_status, disable_sim_flag):
         'pause_resume_playback_btn_disabled': no_update,
         'cancel_scripts_disabled': no_update,
         'playback_btn_children': no_update,
-        'change_time_disabled': no_update
+        'change_time_disabled': no_update,
+        'change_speed_disabled': no_update
     }
 
     # Mapping of script_status to specific updates
@@ -964,7 +967,8 @@ def _update_button_states(script_status, disable_sim_flag):
         state['playback_btn_disabled'] = True
         state['pause_resume_playback_btn_disabled'] = True
         state['refresh_polling_btn_disabled'] = True
-        state['change_time'] = True
+        state['change_time_disabled'] = True
+        state['change_speed_disabled'] = True
     
     return (
         state['run_scripts_btn_disabled'],
@@ -973,7 +977,8 @@ def _update_button_states(script_status, disable_sim_flag):
         state['pause_resume_playback_btn_disabled'],
         state['cancel_scripts_disabled'],
         state['playback_btn_children'],
-        state['change_time_disabled']
+        state['change_time_disabled'],
+        state['change_speed_disabled']
     )
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
@@ -1175,7 +1180,7 @@ def run_transpose_script(PLACEFILES_DIR, sim_times, radar_info) -> None:
     Output('end_readout', 'children'),
     Output('end_readout', 'style'),
     Output('change_time', 'options'),
-    Output('speed_dropdown', 'disabled'),
+    Output('speed_dropdown', 'disabled', allow_duplicate=True),
     Output('playback_specs', 'data', allow_duplicate=True),
     Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
     Output('run_scripts_btn', 'disabled', allow_duplicate=True),
