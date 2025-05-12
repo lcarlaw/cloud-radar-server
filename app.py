@@ -770,7 +770,7 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     Output('new_radar_selection', 'disabled', allow_duplicate=True),
     # Interval components
     Output('directory_monitor', 'disabled', allow_duplicate=True),  
-    #Output('show_script_progress', 'children', allow_duplicate=True),
+    Output('show_script_progress', 'children', allow_duplicate=True),
     Input('script_status_interval', 'n_intervals'),
     State('configs', 'data'),
     State('radar_info', 'data'),
@@ -792,7 +792,7 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
     that aren't broadcast to the user.
     """
     monitor_disabled = False 
-    #screen_output = no_update
+    screen_output = no_update
 
     # Get script status from file. Will be: startup, running, cancelled, or sim launched
     status_file = f"{configs['DATA_DIR']}/script_status.txt"
@@ -817,7 +817,7 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
 
     if script_status != 'running':
         monitor_disabled = True
-        #screen_output = "" # So the last script status is purged from the display
+        screen_output = "" # So the last script status is purged from the display
     
     #if script_status not in ['running', 'sim launched']:
     #    script_interval_disabled = True
@@ -853,7 +853,7 @@ def button_control(_n, configs, radar_info, output_selections, playback_status,
             month_disabled, day_disabled, hour_disabled, minute_disabled, 
             duration_disabled, output_selection_display, radar_quantity_disabled, 
             map_btn_disabled, confirm_radars_btn_disabled, new_radar_selection_disabled,
-            monitor_disabled)
+            monitor_disabled, screen_output)
 
 def _update_ui_status(playback_status, script_status):
     """
