@@ -4,41 +4,25 @@ allows users to simulate radar operations, including the generation of radar dat
 hodographs. The application is designed to mimic the behavior of a radar system over a
 specified period, starting from a predefined date and time. It allows for the simulation of
 radar data generation, including the handling of time shifts and geographical coordinates.
-
 """
-# from flask import Flask, render_template
-import os
-import shutil
-import zipfile
-#import gzip
 
-import re
-import subprocess
+import os
 from pathlib import Path
 from glob import glob
 import time
 from datetime import datetime, timedelta, timezone
 import calendar
-import math
-import json
 import logging
 import mimetypes
-import signal
-import io
-import base64
 #import smtplib
 #from email.mime.text import MIMEText
 #from email.mime.multipart import MIMEMultipart
-import psutil
 import pytz
 import pandas as pd
 
-# from time import sleep
-from dash import Dash, html, Input, Output, dcc, ctx, State, no_update  # , callback
+from dash import Dash, html, Input, Output, dcc, ctx, State, no_update  
 from dash.exceptions import PreventUpdate
-# from dash import diskcache, DiskcacheManager, CeleryManager
-# from uuid import uuid4
-# import diskcache
+
 import numpy as np
 from botocore.client import Config
 # bootstrap is what helps styling for a better presentation
@@ -47,33 +31,20 @@ import config
 from config import app
 
 import layout_components as lc
-from scripts.obs_placefile import Mesowest
-from scripts.Nexrad import NexradDownloader
-from scripts.munger import Munger
 from scripts.update_dir_list import UpdateDirList
 from scripts.update_hodo_page import UpdateHodoHTML
 from scripts.update_placefiles import UpdatePlacefiles
-from scripts.nse import Nse
-
 import utils
+import processing
+import placefiles
+import times
+
 mimetypes.add_type("text/plain", ".cfg", True)
 mimetypes.add_type("text/plain", ".list", True)
-
-# Earth radius (km)
-R = 6_378_137
-
-# Regular expressions. First one finds lat/lon pairs, second finds the timestamps.
-LAT_LON_REGEX = "[0-9]{1,2}.[0-9]{1,100},[ ]{0,1}[|\\s-][0-9]{1,3}.[0-9]{1,100}"
-TIME_REGEX = "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
 
 # Stops flask from writing "POST /_dash-update-component HTTP/1.1" 200 to logs
 log = logging.getLogger('werkzeug')  # 'werkzeug' is the logger used by Flask
 log.setLevel(logging.WARNING)  # You can set it to ERROR or CRITICAL as well
-
-"""
-Idea is to move all of these functions to some other utility file within the main dir
-to get them out of the app.
-"""
 
 
 def create_logfile(LOG_DIR):
@@ -87,291 +58,6 @@ def create_logfile(LOG_DIR):
         format='%(levelname)s %(asctime)s :: %(message)s',
         datefmt="%Y-%m-%d %H:%M:%S"
     )
-
-
-def shift_placefiles(PLACEFILES_DIR, sim_times, radar_info) -> None:
-    """
-    # While the _shifted placefiles should be purged for each run, just ensure we're
-    # only querying the "original" placefiles to shift (exclude any with _shifted.txt)        
-    """
-    filenames = glob(f"{PLACEFILES_DIR}/*.txt")
-    filenames = [x for x in filenames if "shifted" not in x]
-    filenames = [x for x in filenames if "updated" not in x]
-    for file_ in filenames:
-        outfilename = f"{file_[0:file_.index('.txt')]}_shifted.txt"
-        outfile = open(outfilename, 'w', encoding='utf-8')
-        with open(file_, 'r', encoding='utf-8') as f:
-            data = f.readlines()
-
-        try:
-            for line in data:
-                new_line = line
-
-                if sim_times['simulation_seconds_shift'] is not None and \
-                        any(x in line for x in ['Valid', 'TimeRange', 'Time']):
-                    new_line = shift_time(
-                        line, sim_times['simulation_seconds_shift'])
-
-                # Shift this line in space. Only perform if both an original and
-                # transpose radar have been specified.
-                if radar_info['new_radar'] != 'None' and radar_info['radar'] is not None:
-                    regex = re.findall(LAT_LON_REGEX, line)
-                    if len(regex) > 0:
-                        idx = regex[0].index(',')
-                        plat, plon = float(regex[0][0:idx]), float(regex[0][idx+1:])
-                        lat_out, lon_out = move_point(plat, plon, radar_info['lat'],
-                                                      radar_info['lon'],
-                                                      radar_info['new_lat'],
-                                                      radar_info['new_lon'])
-                        new_line = line.replace(regex[0], f"{lat_out}, {lon_out}")
-                outfile.write(new_line)
-        except (IOError, ValueError, KeyError) as e:
-            outfile.truncate(0)
-            outfile.write(f"Errors shifting this placefile: {e}")
-        outfile.close()
-
-
-def shift_time(line: str, simulation_seconds_shift: int) -> str:
-    """
-    Shifts the time-associated lines in a placefile.
-    These look for 'Valid' and 'TimeRange'.
-    """
-    simulation_time_shift = timedelta(seconds=simulation_seconds_shift)
-    new_line = line
-    if 'Valid:' in line:
-        idx = line.find('Valid:')
-        # Leave off \n character
-        valid_timestring = line[idx+len('Valid:')+1:-1]
-        dt = datetime.strptime(valid_timestring, '%H:%MZ %a %b %d %Y')
-        new_validstring = datetime.strftime(dt + simulation_time_shift,
-                                            '%H:%MZ %a %b %d %Y')
-        new_line = line.replace(valid_timestring, new_validstring)
-
-    if 'TimeRange' in line:
-        regex = re.findall(TIME_REGEX, line)
-        dt = datetime.strptime(regex[0], '%Y-%m-%dT%H:%M:%SZ')
-        new_datestring_1 = datetime.strftime(dt + simulation_time_shift,
-                                             '%Y-%m-%dT%H:%M:%SZ')
-        dt = datetime.strptime(regex[1], '%Y-%m-%dT%H:%M:%SZ')
-        new_datestring_2 = datetime.strftime(dt + simulation_time_shift,
-                                             '%Y-%m-%dT%H:%M:%SZ')
-        new_line = line.replace(f"{regex[0]} {regex[1]}",
-                                f"{new_datestring_1} {new_datestring_2}")
-
-    # For LSR placefiles
-    if 'LSR Time' in line:
-        regex = re.findall(TIME_REGEX, line)
-        dt = datetime.strptime(regex[0], '%Y-%m-%dT%H:%M:%SZ')
-        new_datestring = datetime.strftime(dt + simulation_time_shift,
-                                           '%Y-%m-%dT%H:%M:%SZ')
-        new_line = line.replace(regex[0], new_datestring)
-
-    return new_line
-
-
-def move_point(plat, plon, lat, lon, new_radar_lat, new_radar_lon):
-    """
-    Shift placefiles to a different radar site. Maintains the original azimuth and range
-    from a specified RDA and applies it to a new radar location. 
-
-    Parameters:
-    -----------
-    plat: float 
-        Original placefile latitude
-    plon: float 
-        Original palcefile longitude
-
-    lat and lon is the lat/lon pair for the original radar 
-    new_lat and new_lon is for the transposed radar. These values are set in 
-    the transpose_radar function after a user makes a selection in the 
-    new_radar_selection dropdown. 
-
-    """
-    def _clamp(n, minimum, maximum):
-        """
-        Helper function to make sure we're not taking the square root of a negative 
-        number during the calculation of `c` below. 
-        """
-        return max(min(maximum, n), minimum)
-
-    # Compute the initial distance from the original radar location
-    phi1, phi2 = math.radians(lat), math.radians(plat)
-    d_phi = math.radians(plat - lat)
-    d_lambda = math.radians(plon - lon)
-
-    a = math.sin(d_phi/2)**2 + (math.cos(phi1) *
-                                math.cos(phi2) * math.sin(d_lambda/2)**2)
-    a = _clamp(a, 0, a)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-    d = R * c
-
-    # Compute the bearing
-    y = math.sin(d_lambda) * math.cos(phi2)
-    x = (math.cos(phi1) * math.sin(phi2)) - (math.sin(phi1) * math.cos(phi2) *
-                                             math.cos(d_lambda))
-    theta = math.atan2(y, x)
-    bearing = (math.degrees(theta) + 360) % 360
-
-    # Apply this distance and bearing to the new radar location
-    phi_new, lambda_new = math.radians(
-        new_radar_lat), math.radians(new_radar_lon)
-    phi_out = math.asin((math.sin(phi_new) * math.cos(d/R)) + (math.cos(phi_new) *
-                        math.sin(d/R) * math.cos(math.radians(bearing))))
-    lambda_out = lambda_new + math.atan2(math.sin(math.radians(bearing)) *
-                                         math.sin(d/R) * math.cos(phi_new),
-                                         math.cos(d/R) - math.sin(phi_new) * math.sin(phi_out))
-    return math.degrees(phi_out), math.degrees(lambda_out)
-
-
-def copy_grlevel2_cfg_file(cfg) -> None:
-    """
-    Ensures a grlevel2.cfg file is copied into the polling directory.
-    This file is required for GR2Analyst to poll for radar data.
-    """
-    source = f"{cfg['BASE_DIR']}/grlevel2.cfg"
-    destination = f"{cfg['POLLING_DIR']}/grlevel2.cfg"
-    try:
-        shutil.copyfile(source, destination)
-    except (FileNotFoundError, PermissionError) as e:
-        print(f"Error copying {source} to {destination}: {e}")
-
-
-def remove_files_and_dirs(cfg) -> None:
-    """
-    Cleans up files and directories from the previous simulation so these datasets
-    are not included in the current simulation.
-    """
-    dirs = [cfg['RADAR_DIR'], cfg['POLLING_DIR'], cfg['HODOGRAPHS_DIR'], cfg['MODEL_DIR'],
-            cfg['PLACEFILES_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['PROBSEVERE_DIR']]
-    for directory in dirs:
-        for root, dirs, files in os.walk(directory, topdown=False):
-            for name in files:
-                if name not in ['grlevel2.cfg', 'events.txt']:
-                    os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-
-    # Remove the original file_times.txt file. This will get re-created by munger.py
-    try:
-        os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
-    except FileNotFoundError:
-        pass
-
-
-def remove_munged_radar_files(cfg) -> None:
-    """
-    Removes uncompressed and 'munged' radar files within the /data/xx/radar directory 
-    after the pre-processing scripts have completed. These files are no longer needed 
-    as the appropriate files have been exported to the /assets/xx/polling directory. 
-    
-    copies the original files to the user downloads directory so they can be
-    downloaded by the user if desired.
-    """
-    regex_pattern = r'^(.{4})(\d{8})_(\d{6})$'
-    #raw_pattern = r'^(.{4})(\d{8})_(\d{6})_(V\d{2})$'
-    # Searches for filenames with either Vxx or .gz. Older radar files are gzipped.
-    raw_pattern = r'^.{4}\d{8}_\d{6}(_V\d{2}|\.gz)$'
-    for root, _, files in os.walk(cfg['RADAR_DIR']):
-        if Path(root).name == 'downloads':
-            for name in files:
-                thisfile = os.path.join(root, name)
-                matched = re.match(regex_pattern, name)
-                raw_matched = re.match(raw_pattern, name)
-                if matched or '.uncompressed' in name:
-                    os.remove(thisfile)
-                if raw_matched:
-                    shutil.copy2(thisfile, cfg['USER_DOWNLOADS_DIR'])
-
-def zip_downloadable_radar_files(cfg) -> None:
-    """
-    After all radar files have been processed and are ready for download, this function
-    zips up the radar files already in the user downloads directory.
-    """
-    shutil.make_archive('radar_files', 'zip', cfg['USER_DOWNLOADS_DIR'])
-    shutil.move('radar_files.zip', f"{cfg['USER_DOWNLOADS_DIR']}/original_radar_files.zip")
-
-
-def zip_original_placefiles(cfg) -> None:
-    """
-    After the placefiles have been shifted and are ready for download, this function
-    zips up the original placefiles.
-    """
-    zip_filepath = f"{cfg['USER_DOWNLOADS_DIR']}/original_placefiles.zip"
-    with zipfile.ZipFile(zip_filepath, 'w') as zipf:
-        for root, _, files in os.walk(cfg['PLACEFILES_DIR']):
-            for file in files:
-                if 'txt' in file and 'updated' not in file and 'shifted' not in file:
-                    file_path = os.path.join(root, file)
-                    zipf.write(file_path, file)
-
-def date_time_string(dt) -> str:
-    """
-    Converts a datetime object to a string.
-    """
-    return datetime.strftime(dt, "%Y-%m-%d %H:%M")
-
-
-def make_simulation_times(event_start_time, event_duration) -> dict:
-    """
-    playback_end_time: datetime object
-        - set to current time then rounded down to nearest 15 min.
-    playback_start_time: datetime object
-        - the time the simulation starts.
-        - playback_end_time minus the event duration
-        - This is "recent enough" for GR2Analyst to poll data
-    playback_timer: datetime object
-        - the "current" displaced realtime during the playback
-    event_start_time: datetime object
-        - the historical time the actual event started.
-        - based on user inputs of the event start time
-    simulation_time_shift: timedelta object
-        the difference between the playback start time and the event start time
-    simulation_seconds_shift: int
-        the difference between the playback start time and the event start time in seconds
-
-    Variables ending with "_str" are the string representations of the datetime objects
-    """
-
-    now = datetime.now(pytz.utc).replace(second=0, microsecond=0)
-    playback_end = now - timedelta(minutes=now.minute % 15)
-    playback_end_str = date_time_string(playback_end)
-
-    playback_start = playback_end - timedelta(minutes=event_duration)
-    playback_start_str = date_time_string(playback_start)
-
-    # The playback clock is set to 10 minutes after the start of the simulation
-    playback_clock = playback_start + timedelta(seconds=600)
-    playback_clock_str = date_time_string(playback_clock)
-
-    # a timedelta object is not JSON serializable, so cannot be included in the output
-    # dictionary stored in the dcc.Store object. All references to simulation_time_shift
-    # will need to use the simulation_seconds_shift reference instead.
-    simulation_time_shift = playback_start - event_start_time
-    simulation_seconds_shift = round(simulation_time_shift.total_seconds())
-    event_start_str = date_time_string(event_start_time)
-    increment_list = []
-    for t in range(0, int(event_duration/5) + 1, 1):
-        new_time = playback_start + timedelta(seconds=t*300)
-        new_time_str = date_time_string(new_time)
-        increment_list.append(new_time_str)
-
-    playback_dropdown_dict = [
-        {'label': increment, 'value': increment} for increment in increment_list]
-
-    sim_times = {
-        'event_start_str': event_start_str,
-        'simulation_seconds_shift': simulation_seconds_shift,
-        'playback_start_str': playback_start_str,
-        'playback_start': playback_start,
-        'playback_end_str': playback_end_str,
-        'playback_end': playback_end,
-        'playback_clock_str': playback_clock_str,
-        'playback_clock': playback_clock,
-        'playback_dropdown_dict': playback_dropdown_dict,
-        'event_duration': event_duration
-    }
-
-    return sim_times
 
 
 def create_radar_dict(sa) -> dict:
@@ -474,6 +160,13 @@ def generate_layout(layout_has_initialized, children, configs):
             'radar_files_dict': radar_files_dict
         }
 
+        # Initialize the script status tracking file and purge completion file if 
+        # it exists 
+        utils.write_status_file('startup', f"{configs['DATA_DIR']}/script_status.txt")
+        completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+        if completed_file.is_file():
+            completed_file.unlink()
+
         # Settings for date dropdowns moved here to avoid specifying different values in
         # the layout
         now = datetime.now(pytz.utc)
@@ -533,10 +226,12 @@ def generate_layout(layout_has_initialized, children, configs):
 
                 dbc.Row(
                  [dbc.Col(dbc.ListGroupItem("Download Original Radar Files",
-                                href=f"{configs['LINK_BASE']}/downloads/original_radar_files.zip"),
+                                href=f"{configs['LINK_BASE']}/downloads/original_radar_files.zip",
+                                disabled=True, id="download_radar_link"),
                                 style={'color':lc.graphics_c},width=4),
                      dbc.Col(dbc.ListGroupItem("Download Original Unshifted Placefiles",
-                                href=f"{configs['LINK_BASE']}/downloads/original_placefiles.zip"),
+                                href=f"{configs['LINK_BASE']}/downloads/original_placefiles.zip",
+                                disabled=True, id="download_placefile_link"),
                                 style={'color':lc.graphics_c},width=4),
                      dbc.Col(dbc.ListGroupItem("Hodograph Creation Instructions",
                                 href="https://docs.google.com/document/d/1pRT0l27Zo3WusVnGS-nvJiQXcW3AkyJ91RH8gISqoDQ/edit", target="_blank"),
@@ -553,14 +248,21 @@ def generate_layout(layout_has_initialized, children, configs):
                     links_section
                 ]), id="placefiles_section", style=lc.section_box_pad))
 
+        MODAL_TEXT = """
+            A change to one of the inputs has been detected after previously running the
+            processing scripts. You will need to click the Run Scripts button again to 
+            regenerate data for your simulation. All sim clock buttons will be disabled.
+        """
         new_items = dbc.Container([
+            dbc.Modal(
+                [dbc.ModalHeader(dbc.ModalTitle("Alert!")), dbc.ModalBody(MODAL_TEXT)],
+                id='input_change_modal', size='lg', is_open=False, style={'font-size':'20px'},
+            ),
+            dcc.Store(id='modal_count', data=0),
+            dcc.Store(id='disable_sim_flag', data=False),
             dcc.Interval(id='playback_timer', disabled=True, interval=15*1000),
-            # dcc.Store(id='tradar'),
             dcc.Store(id='dummy'),
             dcc.Store(id='playback_running_store', data=False),
-            dcc.Store(id='playback_start_store'),   # might be unused
-            dcc.Store(id='playback_end_store'),     # might be unused
-            dcc.Store(id='playback_clock_store'),   # might be unused
 
             dcc.Store(id='radar_info', data=radar_info),
             dcc.Store(id='sim_times'),
@@ -568,7 +270,8 @@ def generate_layout(layout_has_initialized, children, configs):
             dcc.Store(id='playback_specs'),
 
             # For app/script monitoring
-            dcc.Interval(id='directory_monitor', interval=2000),
+            dcc.Interval(id='script_status_interval', interval=1000),
+            dcc.Interval(id='directory_monitor', interval=2000, disabled=True),
             dcc.Store(id='monitor_store', data=monitor_store),
 
             lc.top_section, lc.top_banner,
@@ -578,7 +281,7 @@ def generate_layout(layout_has_initialized, children, configs):
                                         dbc.Row([
                                             sim_year_section, sim_month_section, sim_day_selection,
                                             sim_hour_section, sim_minute_section,
-                                            sim_duration_section, lc.spacer,
+                                            sim_duration_section, lc.output_selections, lc.spacer,
                                             lc.step_time_confirm])], style={'padding': '1em'}),
                               ], style=lc.section_box_pad)])
             ]), lc.spacer,lc.spacer_mini,
@@ -620,6 +323,7 @@ def generate_layout(layout_has_initialized, children, configs):
     Output('confirm_radars_btn', 'children'),
     Output('confirm_radars_btn', 'disabled'),
     Output('radar_info', 'data'),
+    Output('new_radar_selection', 'value', allow_duplicate=True),
     [Input('radar_quantity', 'value'),
      Input('graph', 'clickData'),
      State('radar_info', 'data')],
@@ -641,12 +345,15 @@ def display_click_data(quant_str: str, click_data: dict, radar_info: dict):
         radar_info['number_of_radars'] = int(quant_str[0:1])
         radar_info['radar_list'] = []
         radar_info['radar_dict'] = {}
-        return f'Use map to select {quant_str}', f'{select_action} selections', True, radar_info
+        radar_info['new_radar'] = 'None'
+        radar_info['new_lat'] = None 
+        radar_info['new_lon'] = None
+        return f'Use map to select {quant_str}', f'{select_action} selections', True, radar_info, 'None'
 
     try:
         radar = click_data['points'][0]['customdata']
     except (KeyError, IndexError, TypeError):
-        return 'No radar selected ...', f'{select_action} selections', True, radar_info
+        return 'No radar selected ...', f'{select_action} selections', True, radar_info, no_update
 
     if radar not in radar_info['radar_list']:
         radar_info['radar_list'].append(radar)
@@ -658,7 +365,7 @@ def display_click_data(quant_str: str, click_data: dict, radar_info: dict):
     radar_info['radar'] = radar
 
     listed_radars = ', '.join(radar_info['radar_list'])
-    return listed_radars, f'{select_action} selections', btn_deactivated, radar_info
+    return listed_radars, f'{select_action} selections', btn_deactivated, radar_info, no_update
 
 
 @app.callback(
@@ -676,6 +383,9 @@ def toggle_map_display(map_n, confirm_n) -> dict:
         return {'display': 'none'}, 'Show Radar Map'
     return lc.map_section_style, 'Hide Radar Map'
 
+################################################################################################
+# ----------------------------- Transpose radar section  ---------------------------------------
+################################################################################################
 
 @app.callback(
     [Output('full_transpose_section_id', 'style'),
@@ -685,10 +395,13 @@ def toggle_map_display(map_n, confirm_n) -> dict:
      ], Input('confirm_radars_btn', 'n_clicks'),
     Input('radar_quantity', 'value'),
     State('radar_info', 'data'),
+    Input('output_selections', 'value'),
     prevent_initial_call=True)
-def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict) -> dict:
+def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict,
+                              output_selections: list) -> dict:
     """
     This will display the transpose section on the page if the user has selected a single radar.
+    Also handles changes to the output selections--if original radar only is selected or not.
     """
     disp_none = {'display': 'none'}
     # script_style = {'padding': '1em', 'vertical-align': 'middle'}
@@ -696,34 +409,46 @@ def finalize_radar_selections(clicks: int, _quant_str: str, radar_info: dict) ->
     if triggered_id == 'radar_quantity':
         return disp_none, disp_none, disp_none, True
     if clicks > 0:
-        if radar_info['number_of_radars'] == 1 and len(radar_info['radar_list']) == 1:
+        if radar_info['number_of_radars'] == 1 and len(radar_info['radar_list']) == 1 and \
+            'original_radar_only' not in output_selections:
             return lc.section_box_pad, disp_none, {'display': 'block'}, False
-    return lc.section_box_pad, {'display': 'block'}, disp_none, False
-
-################################################################################################
-# ----------------------------- Transpose radar section  ---------------------------------------
-################################################################################################
+        else: 
+            return lc.section_box_pad, {'display': 'block'}, disp_none, False
+    
+    # This needs to be last, otherwise run scripts button won't activate if this option
+    # is selected prior to making radar selections. Additional checking so that clicking 
+    # original radar doesn't result in Run scripts briefly becoming clickable each time.
+    if triggered_id == 'output_selections':
+        if 'original_radar_only' in output_selections:
+            return no_update, no_update, no_update, no_update
+        else:
+            return disp_none, {'display': 'block'}, disp_none, True
+    return disp_none, {'display': 'block'}, disp_none, False
 
 
 @app.callback(
     Output('radar_info', 'data', allow_duplicate=True),
+    #Output('new_radar_selection', 'value', allow_duplicate=True),
     [Input('new_radar_selection', 'value'),
      Input('radar_quantity', 'value'),
-     State('radar_info', 'data')],
+     State('radar_info', 'data'),
+     Input('output_selections', 'value')],
     prevent_initial_call=True
 )
-def transpose_radar(value, radar_quantity, radar_info):
+def transpose_radar(value, radar_quantity, radar_info, output_selections):
     """
     If a user switches from a selection BACK to "None", without this, the application 
     will not update new_radar to None. Instead, it'll be the previous selection.
     Since we always evaluate "value" after every user selection, always set new_radar 
     initially to None.
     """
+    #new_radar = 'None'
     radar_info['new_radar'] = 'None'
     radar_info['new_lat'] = None
     radar_info['new_lon'] = None
     radar_info['number_of_radars'] = int(radar_quantity[0:1])
-    if value != 'None' and radar_info['number_of_radars'] == 1:
+    if value != 'None' and radar_info['number_of_radars'] == 1 and \
+        'original_radar_only' not in output_selections:
         new_radar = value
         radar_info['new_radar'] = new_radar
         radar_info['new_lat'] = lc.df[lc.df['radar']
@@ -733,285 +458,102 @@ def transpose_radar(value, radar_quantity, radar_info):
     return radar_info
 
 ################################################################################################
-# ----------------------------- Run Scripts button  --------------------------------------------
+# ----------------------------- Processing Scripts  --------------------------------------------
 ################################################################################################
 
-
-def query_radar_files(cfg, radar_info, sim_times):
+def run_scripts(scripts_to_run, sim_times, configs, radar_info, lsr_delay):
     """
-    Get the radar files from the AWS bucket. This is a preliminary step to build the progess bar.
+    This function handles the execution of all processing scripts 
     """
-    # Need to reset the expected files dictionary with each call. Otherwise, if a user
-    # cancels a request, the previously-requested files will still be in the dictionary.
-    # radar_files_dict = {}
-    radar_info['radar_files_dict'] = {}
-    for _r, radar in enumerate(radar_info['radar_list']):
-        radar = radar.upper()
-        args = [radar, str(sim_times['event_start_str']), str(sim_times['event_duration']),
-                str(False), cfg['RADAR_DIR']]
-        # logging.info(f"{cfg['SESSION_ID']} :: Passing {args} to Nexrad.py")
-        results = utils.exec_script(
-            Path(cfg['NEXRAD_SCRIPT_PATH']), args, cfg['SESSION_ID'])
-        if results['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            logging.warning(
-                f"{cfg['SESSION_ID']} :: User cancelled query_radar_files()")
-            break
+    status = 'running'
+    create_radar_dict(radar_info)
+    if scripts_to_run['query_and_download_radar']:
+        logging.info(f"Radar download status: {status}")
+        status = processing.query_and_download_radars(radar_info, configs, sim_times)
 
-        json_data = results['stdout'].decode('utf-8')
-        logging.info(
-            f"{cfg['SESSION_ID']} :: Nexrad.py returned with {json_data}")
-        radar_info['radar_files_dict'].update(json.loads(json_data))
+    if scripts_to_run['munger_radar'] and status == 'running':
+        logging.info(f"Radar mungering status: {status}")
+        status = processing.munger_radar(radar_info, configs, sim_times)
 
-    # Write radar metadata for this simulation to a text file. More complicated updating the
-    # dcc.Store object with this information since this function isn't a callback.
-    with open(f'{cfg['RADAR_DIR']}/radarinfo.json', 'w', encoding='utf-8') as json_file:
-        json.dump(radar_info['radar_files_dict'], json_file)
+    if scripts_to_run['placefiles'] and status == 'running':
+        logging.info(f"Surface placefile status: {status}")
+        status = processing.generate_fast_placefiles(radar_info, configs, sim_times, 
+                                                     lsr_delay)
 
-    return results
+    # The events files are always updated
+    if status == 'running':
+        logging.info(f"Event files status: {status}")
+        status = processing.generate_events_files(configs, sim_times)
 
-
-def call_function(func, *args, **kwargs):
-    # For the main script calls
-    if len(args) > 2 and func.__name__ != 'query_radar_files':
-        logging.info(f"Sending {args[1]} to {args[0]}")
-
-    result = func(*args, **kwargs)
-
-    if len(result['stderr']) > 0:
-        logging.error(result['stderr'].decode('utf-8'))
-    if 'exception' in result:
-        logging.error(f"Exception {result['exception']} occurred in {
-                      func.__name__}"
-        )
-    return result
-
-
-def run_with_cancel_button(cfg, sim_times, radar_info):
-    """
-    This version of the script-launcher trying to work in cancel button
-    """
-    UpdateHodoHTML('None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-
-    # based on list of selected radars, create a dictionary of radar metadata
-    try:
-        create_radar_dict(radar_info)
-        copy_grlevel2_cfg_file(cfg)
-    except (IOError, ValueError, KeyError) as e:
-        logging.exception(
-            "Error creating radar dict or config file: %s",e,exc_info=True)
-        
-    log_string = (
-        f"\n"
-        f"=========================Simulation Settings========================\n"
-        f"Session ID: {cfg['SESSION_ID']}\n"
-        f"{sim_times}\n"
-        f"{radar_info}\n"
-        f"====================================================================\n"
-    )
-    logging.info(log_string)
-
-    if len(radar_info['radar_list']) > 0:
-
-        # Create initial dictionary of expected radar files.
-        # TO DO: report back issues with radar downloads (e.g. 0 files found)
-        res = call_function(query_radar_files, cfg, radar_info, sim_times)
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            return
-
-        # Radar downloading and mungering steps
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-            # --------- Links Page -----------------------------------------------------
-            #cfg['LINK_BASE'], cfg['LINKS_HTML_PAGE']
-            args = [cfg['LINK_BASE'], cfg['LINKS_HTML_PAGE']]
-            res = call_function(utils.exec_script, Path(cfg['LINKS_PAGE_SCRIPT_PATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # Radar download
-            args = [radar, str(sim_times['event_start_str']),
-                    str(sim_times['event_duration']), str(True), cfg['RADAR_DIR']]
-            res = call_function(utils.exec_script, Path(cfg['NEXRAD_SCRIPT_PATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # Munger
-            args = [radar, str(sim_times['playback_start_str']),
-                    str(sim_times['event_duration']),
-                    str(sim_times['simulation_seconds_shift']
-                        ), cfg['RADAR_DIR'],
-                    cfg['POLLING_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['L2MUNGER_FILEPATH'], cfg['DEBZ_FILEPATH'],
-                    new_radar]
-            res = call_function(utils.exec_script, Path(cfg['MUNGER_SCRIPT_FILEPATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-
-            # this gives the user some radar data to poll while other scripts are running
-            try:
-                UpdateDirList(new_radar, 'None',
-                              cfg['POLLING_DIR'], initialize=True)
-            except (IOError, ValueError, KeyError) as e:
-                print(f"Error with UpdateDirList: {e}")
-                logging.exception("Error with UpdateDirList: %s",e, exc_info=True)
-
-    # Delete the uncompressed/munged radar files from the data directory
-    try:
-        remove_munged_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-
-
-    # --------- LSR Placefiles -----------------------------------------------------
-    #  Not monitored currently due to how quick this executes
-    # center lat, center lon, event start, duration, LSR csv source dir, placefile output dir
-    args = [str(radar_info['lat']), str(radar_info['lon']),
-            str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            cfg['DATA_DIR'], cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['LSR_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- event times text file ----------------------------------------------
-    # -- seconds_shift, csv_dir, radar_dir, html_file, text_file -------------------
-    args = [str(sim_times['simulation_seconds_shift']), cfg['DATA_DIR'], cfg['RADAR_DIR'],
-            cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # Now that all radar files are in assets/{}/downloads dir, zip them up
-    try:
-        zip_downloadable_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error zipping radar files ", exc_info=True)
-
-    # --------- Surface observations placefiles -------------------------------------
-    # center lat, center lon, start timestr, duration, placefile output directory
-    args = [str(radar_info['lat']), str(radar_info['lon']),
-            sim_times['event_start_str'], str(sim_times['event_duration']),
-            cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['OBS_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- ProbSevere download -------------------------------------------------
-    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            cfg['PROBSEVERE_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_DOWNLOAD_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- ProbSevere placefiles -----------------------------------------------
-    # -- center lat, center lon, data source directory, placefile output directory --
-    args = [str(radar_info['lat']), str(radar_info['lon']),cfg['PROBSEVERE_DIR'],
-            cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['PROBSEVERE_PLACEFILE_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # --------- NSE placefiles ------------------------------------------------------
-    args = [str(sim_times['event_start_str']), str(sim_times['event_duration']),
-            cfg['SCRIPTS_DIR'], cfg['DATA_DIR'], cfg['PLACEFILES_DIR']]
-    res = call_function(utils.exec_script, Path(cfg['NSE_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-
-    # Now that all original placefiles should be available, zip them up
-    try:
-        zip_original_placefiles(cfg)
-    except KeyError as e:
-        logging.exception("Error zipping original placefiles ", exc_info=True)
+    if scripts_to_run['nse_placefiles'] and status == 'running':
+        logging.info(f"NSE placefile status: {status}")
+        status = processing.generate_nse_placefiles(configs, sim_times)
 
     # There always is a timeshift with a simulation, so this script needs to
     # execute every time, even if a user doesn't select a radar to transpose to.
-    logging.info("Entering function run_transpose_script")
-    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)
+    if status == 'running':
+        logging.info("Entering function run_transpose_script")
+        run_transpose_script(configs['PLACEFILES_DIR'], sim_times, radar_info)
 
-    # --------- Soundings ---------------------------------------------------------
-   #radar_dict = {'KGRR': {'lat':42.8939, 'lon':-85.54479},
-   #               'KDTX': {'lat':42.69997, 'lon':-83.47167}}
-    #SIM_START = '2024-05-07 21:30'
-    #ASSETS_DIR = '/data/cloud-radar-server/assets'
-    #if sys.platform.startswith('win'):
-    #    Gr2aSoundings(radar_dict, SIM_START, '120', '24835500', ASSETS_DIR)
-    #args = [radar_info, str(sim_times['event_start_str']), str(sim_times['event_duration']),
-    #            str(sim_times['simulation_seconds_shift']), cfg['ASSETS_DIR']]
-    #res = call_function(utils.exec_script, Path(cfg['SOUNDINGS_SCRIPT_PATH']), args,
-    #                    cfg['SESSION_ID'])
-    #if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-    #    return
-
-    # --------- Hodographs ---------------------------------------------------------
-    for radar, data in radar_info['radar_dict'].items():
+        # Zip placefiles up, even if user bypassed the nse placefile generation step.
         try:
-            asos_one = data['asos_one']
-            asos_two = data['asos_two']
-        except KeyError as e:
-            logging.exception("Error getting radar metadata: ", exc_info=True)
+            placefiles.zip_original_placefiles(configs)
+        except Exception as e:
+            logging.exception("Error zipping original placefiles ", exc_info=True)
 
-        # Execute hodograph script
-        args = [radar, radar_info['new_radar'], asos_one, asos_two,
-                str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
-                cfg['HODOGRAPHS_DIR']]
-        res = call_function(utils.exec_script, Path(cfg['HODO_SCRIPT_PATH']), args,
-                            cfg['SESSION_ID'])
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            return
+    if scripts_to_run['hodographs'] and status == 'running':
+        logging.info(f"Hodograph status: {status}")
+        status = processing.generate_hodographs(radar_info, configs, sim_times)
+        
+    return status
 
-        try:
-            UpdateHodoHTML(
-                'None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-        except (IOError, ValueError, KeyError) as e:
-            print("Error updating hodo html: ", e)
-            logging.exception("Error updating hodo html: %s",e, exc_info=True)
+@app.callback(
+    Output('output_selections', 'options'),
+    Output('output_selections', 'value'),
+    State('output_selections', 'options'),
+    Input('output_selections', 'value')
+)
+def enable_disable_outputs(output_options, output_selections):
+    """
+    If user selections "Original radar only" from the output checklist, disable hodograph
+    generation and lsr delay. Placefile generation is still ok and is left unchanged. 
 
+    LSR delay is also disabled if surface placefiles are turned off.
+    """
+    updated_output_options = []
+    for element in output_options:
+        # Disable hodographs if original radar only selected for now. We can turn these
+        # on once we add them as a downloadable zip file. Otherwise, user has no way of 
+        # accessing since sims are disabled for this case. 
+        if element['value'] == 'hodographs':
+            if 'original_radar_only' in output_selections: 
+                element['disabled'] = True 
+                if 'hodographs' in output_selections: 
+                    output_selections.remove('hodographs')
+            else:
+                element['disabled'] = False 
+
+        if element['value'] == 'lsr_delay':
+            if 'placefiles' not in output_selections or \
+                'original_radar_only' in output_selections:
+                element['disabled'] = True
+                if 'lsr_delay' in output_selections: 
+                    output_selections.remove('lsr_delay')
+            else:
+                element['disabled'] = False 
+
+        updated_output_options.append(element)
+    return updated_output_options, output_selections
 
 @app.callback(
     Output('show_script_progress', 'children', allow_duplicate=True),
-    #Output('sim_times', 'data', allow_duplicate=True),
     Input('sim_times', 'data'),
     State('configs', 'data'),
     State('radar_info', 'data'),
+    State('output_selections', 'value'),
     prevent_initial_call=True,
-    running=[
-        (Output('start_year', 'disabled'), True, False),
-        (Output('start_month', 'disabled'), True, False),
-        (Output('start_day', 'disabled'), True, False),
-        (Output('start_hour', 'disabled'), True, False),
-        (Output('start_minute', 'disabled'), True, False),
-        (Output('duration', 'disabled'), True, False),
-        (Output('radar_quantity', 'disabled'), True, False),
-        (Output('map_btn', 'disabled'), True, False),
-        (Output('new_radar_selection', 'disabled'), True, False),
-        (Output('run_scripts_btn', 'disabled'), True, False),
-        # (Output('playback_clock_store', 'disabled'), True, False),
-        (Output('confirm_radars_btn', 'disabled'), True, False),  # added radar confirm btn
-        (Output('playback_btn', 'disabled'), True, False),  # add start sim btn
-        (Output('playback_btn', 'children'), 'Launch Simulation', 'Launch Simulation'), 
-        (Output('refresh_polling_btn', 'disabled'), True, False),
-        (Output('pause_resume_playback_btn', 'disabled'), True, True), # add pause/resume btn
-        # wait to enable change time dropdown
-        (Output('change_time', 'disabled'), True, False),
-        (Output('cancel_scripts', 'disabled'), False, False),
-    ])
-def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
+)
+def coordinate_processing_scripts(sim_times, configs, radar_info, output_selections):
     """
     This function is called after the sim_times dcc.Store object is updated, which in
     turn happens after either the run scripts or refresh polling buttons are clicked.  
@@ -1024,7 +566,29 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
         raise PreventUpdate
     
     button_source = sim_times.get('source')
+    scripts_to_run = {
+        'query_and_download_radar': True,
+        'munger_radar': False,
+        'placefiles': False,
+        'nse_placefiles': False,
+        'hodographs': False
+    }
 
+    for selection in output_selections:
+        if selection: scripts_to_run[selection] = True
+    
+    if 'original_radar_only' not in output_selections: 
+        scripts_to_run['munger_radar'] = True 
+    # Special case if user only wants the original radar data. This allows hodograph
+    # generation with the original date/time.
+    else:
+        sim_times['simulation_seconds_shift'] = 0
+
+    lsr_delay = True
+    if 'lsr_delay' not in output_selections:
+        lsr_delay = False
+
+    create_radar_dict(radar_info)
     # Run the regular pre-processing scripts
     if button_source == 'run_scripts_btn':
         #if config.PLATFORM != 'WINDOWS':
@@ -1036,21 +600,98 @@ def coordinate_preprocessing_and_refresh(sim_times, configs, radar_info):
             #     )
             # except (smtplib.SMTPException, ConnectionError) as e:
             #     print(f"Failed to send email: {e}")
-        remove_files_and_dirs(configs)
-        run_with_cancel_button(configs, sim_times, radar_info)
+        processing.remove_files_and_dirs(configs)
+
+        # If scripts were previously completed, remove the status file
+        completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+        if completed_file.is_file(): 
+            completed_file.unlink()
 
     # Run the refresh polling scripts
     elif button_source == 'refresh_polling_btn':
-        run_refresh_polling_scripts(sim_times, configs, radar_info)
+        # The following scripts are never run for a polling refresh
+        scripts_to_run['query_and_download_radar'] = False
+        scripts_to_run['placefiles'] = False
+        scripts_to_run['nse_placefiles'] = False
+
+        # Add any user overrides from the UI
+        prep_refresh_polling(configs)
     
     else:
         logging.warning(f"Unrecognized button source: {sim_times.get('source')}")
         raise PreventUpdate
+    
+    utils.write_status_file('running', f"{configs['DATA_DIR']}/script_status.txt")
+    log_string = (
+        f"\n"
+        f"=========================Simulation Settings========================\n"
+        f"Session ID: {configs['SESSION_ID']}\n"
+        f"Simulation settings: {sim_times}\n\n"
+        f"Radar info: {radar_info}\n\n"
+        f"Scripts settings: {scripts_to_run}\n"
+        f"====================================================================\n"
+    )
+    logging.info(log_string)
+
+    # Run the processing scripts
+    status = run_scripts(scripts_to_run, sim_times, configs, radar_info, lsr_delay)
+    log_string = (
+        f"\n"
+        f"*************************Scripts completed**************************\n"
+        f"Session ID: {configs['SESSION_ID']}\n"
+        f"********************************************************************\n"
+    )
+    if status == 'running':
+        # Small delay so that monitor interval fires prior to being disabled by the 
+        # button_control function when script_status changes from 'running'. 
+        time.sleep(2) 
+        # If we're here, scripts ran to completion (were not cancelled)
+        utils.write_status_file('completed', f"{configs['DATA_DIR']}/script_status.txt")
+        utils.write_status_file('', f"{configs['DATA_DIR']}/completed.txt")
+        logging.info(log_string)
 
     return no_update
 
+
+def prep_refresh_polling(configs):
+    """
+    Handle initial file removal prior to re-running of pertinent processing script
+    """
+    # Remove the original file_times.txt file. This will get re-created by munger.py
+    try:
+        os.remove(f"{configs['ASSETS_DIR']}/file_times.txt")
+    except FileNotFoundError:
+        pass
+
+    # Delete the uncompressed/munged radar files from the data directory. Needed if a user
+    # canceled a previous refresh before mungering finishes, leaving orphaned .uncompressed
+    # files in the radar data directory.
+    try:
+        processing.remove_munged_radar_files(configs)
+    except KeyError as e:
+        logging.exception("Error removing munged radar files ", exc_info=True)
+
+    # Remove old mungered files 
+    for root, _, files in os.walk(configs['POLLING_DIR']):
+        for name in files:
+            if name not in ['grlevel2.cfg']:
+                logging.info(f"Deleting {name}")
+                os.remove(os.path.join(root, name))
+
+    # Remove original hodograph images
+    hodo_images = glob(f"{configs['HODOGRAPHS_DIR']}/*.png")
+    for image in hodo_images:
+        try:
+            os.remove(image)
+        except:
+            logging.exception(f"Error removing: {image}")
+
+
 @app.callback(
     Output('sim_times', 'data'),
+    Output('disable_sim_flag', 'data', allow_duplicate=True),
+    Output('directory_monitor', 'disabled', allow_duplicate=True),
+    Output('modal_count', 'data', allow_duplicate=True),
      [Input('run_scripts_btn', 'n_clicks'),
       Input('refresh_polling_btn', 'n_clicks'),
      State('start_year', 'value'),
@@ -1072,11 +713,11 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
     triggered = ctx.triggered_id
     if triggered == 'run_scripts_btn':
         dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
-        sim_times = make_simulation_times(dt, dur)
+        sim_times = times.make_simulation_times(dt, dur)
     elif triggered == 'refresh_polling_btn' and current_sim_times:
         dt = datetime.strptime(current_sim_times['event_start_str'], "%Y-%m-%d %H:%M")
         dt = dt.replace(tzinfo=timezone.utc)
-        sim_times = make_simulation_times(dt, current_sim_times['event_duration'])
+        sim_times = times.make_simulation_times(dt, current_sim_times['event_duration'])
     else:
         raise PreventUpdate
 
@@ -1091,11 +732,303 @@ def update_sim_times(n_clicks_run_scripts, n_clicks_refresh_polling, yr, mo, dy,
         f"====================================================================\n"
     )
     logging.info(log_string)
-    return sim_times
 
+    # Always reset this flag, which could be True due to user changing input(s) after 
+    # processing scripts completed. See raise_modal_alert. 
+    disable_sim_flag = False
+
+    # Start the directory monitoring interval 
+    monitor_disabled = False 
+    return sim_times, disable_sim_flag, monitor_disabled, 0
+
+################################################################################################
+# -----------------------------Internal button logic  ------------------------------------------
+################################################################################################
+@app.callback(
+    Output('run_scripts_btn', 'disabled', allow_duplicate=True), 
+    Output('playback_btn', 'disabled', allow_duplicate=True), 
+    Output('refresh_polling_btn', 'disabled', allow_duplicate=True), 
+    Output('pause_resume_playback_btn', 'disabled', allow_duplicate=True),  
+    Output('cancel_scripts', 'disabled', allow_duplicate=True), 
+    Output('playback_btn', 'children', allow_duplicate=True),
+    Output('change_time', 'disabled', allow_duplicate=True),
+    Output('speed_dropdown', 'disabled', allow_duplicate=True),
+    Output('download_radar_link', 'disabled'),
+    Output('download_placefile_link', 'disabled'),
+    # Time and output selections
+    Output('start_year', 'disabled'),
+    Output('start_month', 'disabled'),
+    Output('start_day', 'disabled'),
+    Output('start_hour', 'disabled'),
+    Output('start_minute', 'disabled'),
+    Output('duration', 'disabled'),
+    Output('output_selections_div', 'style'),
+    # Radar section
+    Output('radar_quantity', 'disabled'),
+    Output('map_btn', 'disabled'),
+    Output('confirm_radars_btn', 'disabled', allow_duplicate=True),
+    Output('new_radar_selection', 'disabled', allow_duplicate=True),
+    # Interval components
+    Output('directory_monitor', 'disabled', allow_duplicate=True),  
+    Output('show_script_progress', 'children', allow_duplicate=True),
+    Input('script_status_interval', 'n_intervals'),
+    State('configs', 'data'),
+    State('radar_info', 'data'),
+    State('output_selections', 'value'),
+    State('playback_status', 'children'),
+    State('disable_sim_flag', 'data'),
+    prevent_initial_call=True
+)
+def button_control(_n, configs, radar_info, output_selections, playback_status,
+                   disable_sim_flag):
+    """
+    Coordinates activation and deactivation of clock and script-related buttons on the 
+    UI. This removes button control from the script processing callback due to issues 
+    with handling button release during long-running callbacks.
+
+    Note: disable_sim_flag is set by raise_modal_alert. It's reset to False when
+    either run scripts or refresh polling are clicked. This is mean to inhibit a user 
+    from trying to run a sim with changed inputs, which could cause issues on the backend
+    that aren't broadcast to the user.
+    """
+    monitor_disabled = False 
+    screen_output = no_update
+
+    # Get script status from file. Will be: startup, running, cancelled, or sim launched
+    status_file = f"{configs['DATA_DIR']}/script_status.txt"
+    script_status = utils.read_status_file(status_file)
+
+    (
+    run_scripts_btn_disabled,
+    playback_btn_disabled,
+    refresh_polling_btn_disabled,
+    pause_resume_playback_btn_disabled,
+    cancel_scripts_disabled,
+    playback_btn_children,
+    change_time_disabled,
+    change_speed_disabled
+    ) = _update_button_states(script_status, disable_sim_flag)
+
+    # If scripts previously completed, allow polling refresh.
+    completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+    if completed_file.is_file() and script_status not in ['running', 'sim launched'] \
+        and not disable_sim_flag:
+        refresh_polling_btn_disabled = False
+
+    if script_status != 'running':
+        monitor_disabled = True
+        screen_output = "" # So the last script status is purged from the display
+    
+    #if script_status not in ['running', 'sim launched']:
+    #    script_interval_disabled = True
+
+    # If user changes the # of radars, run scripts needs to be disabled until they
+    # finalize their new selection(s)
+    if 'radar_list' in radar_info:
+        if len(radar_info['radar_list']) != radar_info['number_of_radars']:
+            run_scripts_btn_disabled = True
+
+    # If user selected 'Original radar only', disable simulation running. 
+    #dir_list_sizes = utils.check_dirlist_sizes(configs['POLLING_DIR']) 
+    #if 'original_radar_only' in output_selections or sum(dir_list_sizes.values()) < 1:
+    if 'original_radar_only' in output_selections:
+        playback_btn_disabled = True 
+        pause_resume_playback_btn_disabled = True 
+        refresh_polling_btn_disabled = True 
+        change_time_disabled = True
+
+    # If .zip files are available, change link color and activate ListGroupItem
+    dl_radar_link_disabled, dl_placefile_link_disabled = _update_link_status(configs)
+
+    # Disables user interaction w/ time and radar/map inputs while sim or scripts running
+    (year_disabled, month_disabled, day_disabled, hour_disabled, minute_disabled, 
+    duration_disabled, radar_quantity_disabled, map_btn_disabled, 
+    confirm_radars_btn_disabled, new_radar_selection_disabled, output_selection_display
+    ) = _update_ui_status(playback_status, script_status)
+    
+    return (run_scripts_btn_disabled, playback_btn_disabled, 
+            refresh_polling_btn_disabled, pause_resume_playback_btn_disabled, 
+            cancel_scripts_disabled, playback_btn_children, change_time_disabled, change_speed_disabled,
+            dl_radar_link_disabled, dl_placefile_link_disabled, year_disabled, 
+            month_disabled, day_disabled, hour_disabled, minute_disabled, 
+            duration_disabled, output_selection_display, radar_quantity_disabled, 
+            map_btn_disabled, confirm_radars_btn_disabled, new_radar_selection_disabled,
+            monitor_disabled, screen_output)
+
+def _update_ui_status(playback_status, script_status):
+    """
+    Helper function to button_control. If simulation or processing scripts are running, 
+    disables ability for user to make changes to any inputs. 
+    """
+    # Initial default state (all enabled, output visible)
+    states = {
+        'year': False,
+        'month': False,
+        'day': False,
+        'hour': False,
+        'minute': False,
+        'duration': False,
+        'radar_quantity': False,
+        'map_btn': False,
+        'confirm_radars_btn': False,
+        'new_radar_selection': False
+    }
+    output_selection_display = {'display': 'block'}
+
+    if playback_status == 'Running' or script_status == 'running':
+        # Set all to True (disabled) and hide the output
+        for key in states:
+            states[key] = True
+        output_selection_display = {'display': 'none'}
+
+    return (
+        states['year'], states['month'], states['day'], states['hour'],states['minute'],
+        states['duration'], states['radar_quantity'], states['map_btn'], 
+        states['confirm_radars_btn'], states['new_radar_selection'], 
+        output_selection_display)
+
+def _update_link_status(configs):
+    """
+    Helper function to button_control. If downloadable .zip file(s) exist(s), acivate
+    associated ListGroupItem. Empty zip files seem to be about 22 bytes, so this checks
+    for file sizes over 30 bytes. 
+    
+    This could be extended in the future to update text styling to better highlight 
+    availability, and handle all links--including polling location (which should be 
+    disabled for original radar-only download).
+    """
+    file_path = Path(f"{configs['USER_DOWNLOADS_DIR']}/original_radar_files.zip")
+    download_radar_link_disabled = True
+    #download_radar_link_style = {'color':lc.graphics_c}
+    if file_path.is_file() and file_path.stat().st_size > 30:
+        download_radar_link_disabled = False
+        #download_radar_link_style = {'color':'#06DB42'}
+
+    file_path = Path(f"{configs['USER_DOWNLOADS_DIR']}/original_placefiles.zip")
+    download_placefile_link_disabled = True
+    #download_placefile_link_style = {'color':lc.graphics_c}
+    if file_path.is_file() and file_path.stat().st_size > 30:
+        download_placefile_link_disabled = False
+        #download_placefile_link_style = {'color':'#06DB42'}
+    
+    return download_radar_link_disabled, download_placefile_link_disabled
+
+def _update_button_states(script_status, disable_sim_flag):
+    """
+    Helper function to button_control to map button states to script status.
+    """
+    # Default values
+    state = {
+        'run_scripts_btn_disabled': no_update,
+        'playback_btn_disabled': no_update,
+        'refresh_polling_btn_disabled': no_update,
+        'pause_resume_playback_btn_disabled': no_update,
+        'cancel_scripts_disabled': no_update,
+        'playback_btn_children': no_update,
+        'change_time_disabled': no_update,
+        'change_speed_disabled': no_update
+    }
+
+    # Mapping of script_status to specific updates
+    status_updates = {
+        'running': {
+            'run_scripts_btn_disabled': True,
+            'playback_btn_disabled': True,
+            'refresh_polling_btn_disabled': True,
+            'pause_resume_playback_btn_disabled': True,
+            'cancel_scripts_disabled': False,
+            'playback_btn_children': 'Launch Simulation',
+        },
+        'completed': {
+            'run_scripts_btn_disabled': False,
+            'playback_btn_disabled': False,
+            'refresh_polling_btn_disabled': False,
+            'pause_resume_playback_btn_disabled': True,
+            'cancel_scripts_disabled': True,
+            'playback_btn_children': 'Launch Simulation',
+        },
+        'cancelled': {
+            'run_scripts_btn_disabled': False,
+            'playback_btn_disabled': True,
+            'refresh_polling_btn_disabled': True,
+            'pause_resume_playback_btn_disabled': True,
+            'cancel_scripts_disabled': True,
+            'playback_btn_children': 'Launch Simulation',
+        },
+        'sim launched': {
+            'change_time_disabled': False
+        }
+    }
+
+    # Apply updates for the given status
+    if script_status in status_updates:
+        state.update(status_updates[script_status])
+
+    # If user changed an input after script completion, raise_modal_alert will set 
+    # disable_sim_flag to True, signaling the sim buttons should be disabled.
+    if disable_sim_flag:
+        state['playback_btn_disabled'] = True
+        state['pause_resume_playback_btn_disabled'] = True
+        state['refresh_polling_btn_disabled'] = True
+        state['change_time_disabled'] = True
+        state['change_speed_disabled'] = True
+    
+    return (
+        state['run_scripts_btn_disabled'],
+        state['playback_btn_disabled'],
+        state['refresh_polling_btn_disabled'],
+        state['pause_resume_playback_btn_disabled'],
+        state['cancel_scripts_disabled'],
+        state['playback_btn_children'],
+        state['change_time_disabled'],
+        state['change_speed_disabled']
+    )
 ################################################################################################
 # ----------------------------- Monitoring and reporting script status  ------------------------
 ################################################################################################
+@app.callback(
+    Output('input_change_modal', 'is_open'),
+    Output('modal_count', 'data'),
+    Output('disable_sim_flag', 'data', allow_duplicate=True),
+    Input('start_year', 'value'),
+    Input('start_month', 'value'),
+    Input('start_day', 'value'),
+    Input('start_hour', 'value'),
+    Input('start_minute', 'value'),
+    Input('duration', 'value'),
+    Input('output_selections', 'value'),
+    Input('radar_quantity', 'value'),
+    Input('graph', 'clickData'),
+    Input('new_radar_selection', 'value'),
+    State('configs', 'data'),
+    State('modal_count', 'data'),
+    prevent_initial_call=True
+)
+def raise_modal_alert(yr, mo, dy, hr, mn, dur, outputs, num_radars, graph_click, 
+                      new_radar, configs, modal_count):
+    """
+    If user makes a change to any of the inputs following completion of processing 
+    scripts, serve an alert modal indicating that all simulation clock buttons will be
+    disabled until processing scripts are run again. Function sets disable_sim_flag to 
+    True, which is then picked up by the button monitoring interval to make the changes
+    to the clock/sim playback buttons.
+
+    This only happens if original_radar_only is not selected and if the simulation hasn't
+    already been launched. In this latter case, all of the simulation-dependent items 
+    seem to be stored in the local playback_specs store object.
+
+    This modal will appear once between each run scripts/refresh polling click. 
+    """
+    completed_file = Path(f"{configs['DATA_DIR']}/completed.txt")
+    script_status = utils.read_status_file(f"{configs['DATA_DIR']}/script_status.txt")
+    if completed_file.is_file() and 'original_radar_only' not in outputs \
+        and script_status != 'sim launched':
+        modal_count += 1
+        if modal_count == 1:
+            return True, modal_count, True
+        else:
+            return no_update, modal_count, True
+    return no_update, modal_count, no_update
 
 
 @app.callback(
@@ -1198,7 +1131,7 @@ def monitor(_n, cfg, cancel_btn_disabled, monitor_store):
         hodograph_completion = 0
         if len(radar_files) > 0:
             hodograph_completion = 100 * \
-                (num_hodograph_images / (2*len(radar_files)))
+                (num_hodograph_images / (2*len(radar_files[::2])))
 
         # NSE placefiles
         model_list, model_warning = utils.nse_status_checker(cfg['MODEL_DIR'])
@@ -1230,32 +1163,16 @@ def monitor(_n, cfg, cancel_btn_disabled, monitor_store):
 # A time shift will always be applied in the case of a simulation. Determination of
 # whether to also perform a spatial shift occurrs within shift_placefiles where a check for
 # new_radar != None takes place.
-
-
 def run_transpose_script(PLACEFILES_DIR, sim_times, radar_info) -> None:
     """
     Wrapper function to the shift_placefiles script
     """
-    shift_placefiles(PLACEFILES_DIR, sim_times, radar_info)
+    placefiles.shift_placefiles(PLACEFILES_DIR, sim_times, radar_info)
 
 
 ################################################################################################
 # ----------------------------- Clock Callbacks  -----------------------------------------------
 ################################################################################################
-def check_dirlist_sizes(POLLING_DIR):      
-    """
-    Checks and returns the size of all dir.list files in the polling directory. 
-    """
-    base = Path(POLLING_DIR)
-    dir_list_files = list(base.glob("*/dir.list"))
-    dir_list_sizes = {}
-    for f in dir_list_files:
-        radar_name = f.parent.name
-        size = f.stat().st_size
-        dir_list_sizes[radar_name] = size
-    return dir_list_sizes
-
-
 @app.callback(
     Output('playback_btn', 'children'),
     Output('playback_btn', 'disabled'),
@@ -1266,7 +1183,7 @@ def check_dirlist_sizes(POLLING_DIR):
     Output('end_readout', 'children'),
     Output('end_readout', 'style'),
     Output('change_time', 'options'),
-    Output('speed_dropdown', 'disabled'),
+    Output('speed_dropdown', 'disabled', allow_duplicate=True),
     Output('playback_specs', 'data', allow_duplicate=True),
     Output('refresh_polling_btn', 'disabled', allow_duplicate=True),
     Output('run_scripts_btn', 'disabled', allow_duplicate=True),
@@ -1281,17 +1198,6 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
     Enables/disables interval component that elapses the playback time. User can only 
     click this button this once.
     """
-    # Report out the size of the dir.list files in the polling directory. This is done
-    # first just in case no radar directories are found (shouldn't happen, but just in case), 
-    # which would result in FileNotFoundErrors in UpdateDirList() calls.
-    dir_list_sizes = check_dirlist_sizes(cfg['POLLING_DIR'])
-    log_string = (
-        f"\n"
-        f"*************************Playback Launched**************************\n"
-        f"Session ID: {cfg['SESSION_ID']}\n"
-        f"dir.list sizes (in bytes): {dir_list_sizes}\n"
-    )
-    logging.info(log_string)
 
     playback_specs = {
         'playback_paused': False,
@@ -1331,8 +1237,14 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         refresh_polling_btn_disabled = True
         run_scripts_btn_disabled = True
 
+    # Report out the size of the dir.list files in the polling directory. This is done
+    # following UpdateDirList call. 
+    dir_list_sizes = utils.check_dirlist_sizes(cfg['POLLING_DIR'])
     log_string = (
         f"\n"
+        f"*************************Playback Launched**************************\n"
+        f"Session ID: {cfg['SESSION_ID']}\n"
+        f"dir.list sizes (in bytes): {dir_list_sizes}\n"
         f"Start: {sim_times['playback_start_str']}, End: {sim_times['playback_end_str']}\n"
         f"Start dt: {sim_times['playback_start']}, End dt: {sim_times['playback_end']}\n"
         f"Launch Simulation Button Disabled?: {btn_disabled}\n"
@@ -1341,7 +1253,7 @@ def initiate_playback(_nclick, playback_speed, cfg, sim_times, radar_info):
         f"********************************************************************\n"
     )
     logging.info(log_string)
-
+    utils.write_status_file('sim launched', f"{cfg['DATA_DIR']}/script_status.txt")
     return (btn_text, btn_disabled, False, playback_running, start, style, end, style, options,
             False, playback_specs, refresh_polling_btn_disabled, run_scripts_btn_disabled)
 
@@ -1408,8 +1320,7 @@ def manage_clock_(nclicks, _n_intervals, new_time, _playback_running, playback_s
                 tzinfo=timezone.utc)
 
         if specs['playback_clock'] < specs['playback_end']:
-            specs['playback_clock_str'] = date_time_string(
-                specs['playback_clock'])
+            specs['playback_clock_str'] = times.date_time_string(specs['playback_clock'])
             readout_time = datetime.strftime(
                 specs['playback_clock'], '%Y-%m-%d   %H:%M:%S')
             if config.PLATFORM != 'WINDOWS':
@@ -1541,8 +1452,6 @@ def get_sim(yr, mo, dy, hr, mn, dur) -> str:
     """
     dt = datetime(yr, mo, dy, hr, mn, second=0, tzinfo=timezone.utc)
     line = f'{dt.strftime("%Y-%m-%d %H:%M")}Z ____ {dur} minutes'
-    #sim_times = make_simulation_times(dt, dur)
-    #return line, sim_times
     return line
 
 
@@ -1557,252 +1466,11 @@ def update_day_dropdown(selected_year, selected_month):
     day_options = [{'label': str(day), 'value': day}
                    for day in range(1, num_days+1)]
     return day_options
-
-################################################################################################
-# ------------------------Refresh Polling Times callback  --------------------------------------
-################################################################################################
-# After a certain time, radar data will become too "old" for GR to continue polling. This seems
-# be when radar data is more than 3 hours older than the current time. Clicking the "Refresh 
-# Polling Times" button will execute this callback which will regenerate new simulation times
-# based on the current real world time. It will rerun l2munger, shift_placefiles, and will 
-# regenerate dir.list, event_times, file_times, and hodographs. 
-def run_refresh_polling_scripts(sim_times, cfg, radar_info): 
-    # Remove the original file_times.txt file. This will get re-created by munger.py
-    try:
-        os.remove(f"{cfg['ASSETS_DIR']}/file_times.txt")
-    except FileNotFoundError:
-        pass
-
-    # Delete the uncompressed/munged radar files from the data directory. Needed if a user
-    # canceled a previous refresh before mungering finishes, leaving orphaned .uncompressed
-    # files in the radar data directory.
-    try:
-        remove_munged_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-
-    # --------- Munger ---------------------------------------------------------
-    # This for loop removes the now-stale munged radar files. We do this in a 
-    # first loop  to delete all of the files at once. Otherwise, the monitor bar 
-    # will bounce back-and-forth if the case has more than one radar.
-    if len(radar_info['radar_list']) > 0:
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-            old_files = glob(f"{cfg['POLLING_DIR']}/{new_radar}/*.gz")
-            for f in old_files:
-                logging.info(f"Deleting {f}")
-                os.remove(f)
-
-    if len(radar_info['radar_list']) > 0:
-        for _r, radar in enumerate(radar_info['radar_list']):
-            radar = radar.upper()
-            try:
-                if radar_info['new_radar'] == 'None':
-                    new_radar = radar
-                else:
-                    new_radar = radar_info['new_radar'].upper()
-            except (IOError, ValueError, KeyError) as e:
-                logging.exception("Error defining new radar: %s",e,exc_info=True)
-
-            args = [radar, str(sim_times['playback_start_str']),
-                    str(sim_times['event_duration']),
-                    str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
-                    cfg['POLLING_DIR'], cfg['USER_DOWNLOADS_DIR'], cfg['L2MUNGER_FILEPATH'], 
-                    cfg['DEBZ_FILEPATH'], new_radar]
-            res = call_function(utils.exec_script, Path(cfg['MUNGER_SCRIPT_FILEPATH']),
-                                args, cfg['SESSION_ID'])
-            if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-                return
-            
-    # Delete the uncompressed/munged radar files from the data directory
-    try:
-        remove_munged_radar_files(cfg)
-    except KeyError as e:
-        logging.exception("Error removing munged radar files ", exc_info=True)
-            
-    # --------- Hodographs ---------------------------------------------------------
-    # Remove original images
-    hodo_images = glob(f"{cfg['HODOGRAPHS_DIR']}/*.png")
-    for image in hodo_images:
-        try:
-            os.remove(image)
-        except:
-            logging.exception(f"Error removing: {image}")
-
-    create_radar_dict(radar_info)
-    for radar, data in radar_info['radar_dict'].items():
-        try:
-            asos_one = data['asos_one']
-            asos_two = data['asos_two']
-        except KeyError as e:
-            logging.exception("Error getting radar metadata: ", exc_info=True)
-
-        # Execute hodograph script
-        args = [radar, radar_info['new_radar'], asos_one, asos_two,
-                str(sim_times['simulation_seconds_shift']), cfg['RADAR_DIR'],
-                cfg['HODOGRAPHS_DIR']]
-        res = call_function(utils.exec_script, Path(cfg['HODO_SCRIPT_PATH']), args,
-                            cfg['SESSION_ID'])
-        if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-            return
-
-        try:
-            UpdateHodoHTML(
-                'None', cfg['HODOGRAPHS_DIR'], cfg['HODOGRAPHS_PAGE'])
-        except (IOError, ValueError, KeyError) as e:
-            print("Error updating hodo html: ", e)
-            logging.exception("Error updating hodo html: %s",e, exc_info=True)
-            
-    # --------- Update event times file --------------------------------------------------
-    args = [str(sim_times['simulation_seconds_shift']), cfg['DATA_DIR'], cfg['RADAR_DIR'],
-            cfg['EVENTS_HTML_PAGE'], cfg['EVENTS_TEXT_FILE']]
-    res = call_function(utils.exec_script, Path(cfg['EVENT_TIMES_SCRIPT_PATH']), args,
-                        cfg['SESSION_ID'])
-    if res['returncode'] in [signal.SIGTERM, -1*signal.SIGTERM]:
-        return
-    
-    # --------- Synchronize placefile times with the new sim times ------------------------
-    logging.info("Entering function run_transpose_script")
-    run_transpose_script(cfg['PLACEFILES_DIR'], sim_times, radar_info)      
+  
 
 ################################################################################################
 # ----------------------------- Upload callback  -----------------------------------------------
 ################################################################################################
-
-def make_timerange_line(row) -> str:
-    """
-    This function creates the datetime string for the placefiles
-    """
-    date_str = row.get('utc_date',"")
-    hour = row.get('utc_hour',"")
-    minute = row.get('utc_minute',"")
-    delay =  row.get('delay_min',"")
-    # Handle missing hour or minute values
-    if pd.isna(hour):
-        hour = 0
-    if pd.isna(minute):
-        minute = 0
-    if pd.isna(delay):
-        delay = 0
-
-    # Combine the date, hour, and minute into a datetime object
-    datetime_str = f"{date_str} {int(hour):02d}:{int(minute):02d}"
-
-    orig_dtobj = datetime.strptime(datetime_str, '%m/%d/%Y %H:%M')
-
-    dtobj = orig_dtobj + timedelta(minutes=int(delay))
-    dtobj_end = dtobj + timedelta(minutes=10)
-
-    time_range_start = dtobj.strftime("%Y-%m-%dT%H:%M:%SZ")
-    time_range_end = dtobj_end.strftime("%Y-%m-%dT%H:%M:%SZ")
-    timerange_line = f"TimeRange: {time_range_start} {time_range_end}\n"
-
-    return timerange_line
-
-def create_remark(row) -> str:
-    """
-    This function creates the pop-up text for the placefiles
-    """
-    typetext= row.get('TYPETEXT',"")
-    qualifier = row.get('QUALIFIER',"")
-    mag = row.get('MAG',"")
-    mag_line = ""
-    #if magnitude == "nan" or magnitude == "No_Magnitude":
-    if mag in ("nan", "NO MAG", "NA", "No_Magnitude"):
-        mag_line = "No Magnitude given"
-    else:
-        if typetext == 'TSTM WND GST':
-            mag_line = f"Wind Gust: {mag} mph"
-        if typetext in ('HAIL'):
-            mag_line = f"Size: {mag} inches"
-        if typetext in ('RAIN', 'SNOW'):
-            mag_line = f"Accum: {mag} inches"
-    source = row.get('SOURCE',"")
-    #fake_rpt = row.get('fake_rpt',"")
-    remark = row.get('REMARK',"")
-    if remark in ("nan", "No_Comments", "M","NA", "NO MAG"):
-        remark_line = ""
-    if typetext == 'QUESTION':
-        remark_line = f'{typetext}\\nSource: {source}\\n{remark}\nEnd:\n\n'
-    else:
-        remark_line = f'{typetext}\\n{qualifier}\\n{mag_line}\\nSource: {source}\\n{remark}\nEnd:\n\n'
-    return remark_line
-
-
-def icon_value(event_type) -> int:
-    """
-    This function assigns an icon value based on the event type
-    """
-    #if event_type == 'VERIFIED':
-    if event_type in ('VERIFIED', 'MEASURED'):
-        return 1
-    if event_type in ('UNVERIFIED', 'ESTIMATED'):
-        return 2
-    if event_type == 'QUESTION':
-        return 3
-    return 3
-
-
-def make_events_placefile(contents, filename, cfg):
-    """
-    This function creates the Event Notification placefile for the radar simulation
-    """
-    top_section = 'RefreshSeconds: 5\
-    \nThreshold: 999\
-    \nTitle: Event Notifications -- for radar simulation\
-    \nColor: 255 200 255\
-    \nIconFile: 1, 50, 50, 25, 15, https://raw.githubusercontent.com/tjturnage/cloud-radar-server/main/assets/iconfiles/wessl-three.png\
-    \nIconFile: 2, 30, 30, 15, 10, https://raw.githubusercontent.com/tjturnage/cloud-radar-server/main/assets/iconfiles/wessl-three-small.png\
-    \nFont: 1, 11, 1, "Arial"\n\n'
-
-
-    _content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-
-    try:
-        if 'csv' in filename:
-            place_fout = open(f'{cfg['PLACEFILES_DIR']}/events.txt', 'w', encoding='utf-8')
-            #notifications_csv = open(f'{cfg['DATA_DIR']}/notifications.csv', 'w', encoding='utf-8')
-            events_csv = f'{cfg['DATA_DIR']}/events.csv'
-            place_fout.write("; RSSiC events file\n")
-            place_fout.write(top_section)
-            # Assume that the user uploaded a CSV file
-            df_orig = pd.read_csv(io.StringIO(decoded.decode('utf-8')), dtype=str)
-            df_orig.fillna("NA", inplace=True)
-            df = df_orig.loc[df_orig['TYPETEXT'] != 'NO EVENT']
-
-            df.to_csv(events_csv, index=False, encoding='utf-8')
-
-            for _index,row in df.iterrows():
-                try:
-                    lat = row.get('LAT',"")
-                    lon = row.get('LON',"")
-                    obj_line = f'Object: {lat},{lon}\n'
-
-                    tr_line = make_timerange_line(row)
-                    comments = create_remark(row)
-                    icon_code = icon_value(row.get('QUALIFIER',""))
-                    icon_line = f"Threshold: 999\nIcon: 0,0,0,2,{icon_code}, {comments}"
-                    place_fout.write(tr_line)
-                    place_fout.write(obj_line)
-                    place_fout.write(icon_line)
-                except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError) as e:
-                    return None, f"Error processing file: {e}"
-            place_fout.close()
-            return df, None
-        return None, f"Unsupported file type: {filename}"
-
-    except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError) as e:
-        return None, f"Error processing file: {e}"
-
 @app.callback(Output('show_upload_feedback', 'children'),
               [Input('upload-data', 'contents'),
               State('upload-data', 'filename'),
@@ -1815,7 +1483,7 @@ def update_output(contents, filename, configs, _sim_times):
     """
     if contents is not None:
         try:
-            _df, error = make_events_placefile(contents, filename, configs)
+            _df, error = placefiles.make_events_placefile(contents, filename, configs)
             if error:
                 return html.Div([html.H5(error)])
             return html.Div([
@@ -1842,6 +1510,9 @@ if __name__ == '__main__':
                        dev_tools_hot_reload=False)
     else:
         if config.PLATFORM == 'DARWIN':
+            app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=True, 
+                           use_reloader=False, dev_tools_hot_reload=False)
+        elif config.PLATFORM == 'CLOUD_DEV':
             app.run_server(host="0.0.0.0", port=8051, threaded=True, debug=False, 
                            use_reloader=False, dev_tools_hot_reload=False)
         else:

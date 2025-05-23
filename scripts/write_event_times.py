@@ -81,7 +81,7 @@ class WriteEventTimes(BaseEventTimes):
         try:
             self.lsr_df = self.make_lsr_dataframe()
             self.append_output(self.lsr_df)
-        except ValueError as e:
+        except (ValueError, FileNotFoundError) as e:
             print(f"Error processing file: {e}")
 
         if os.path.exists(self.events_csv):

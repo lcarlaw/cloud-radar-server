@@ -8,8 +8,6 @@ import pandas as pd
 import config
 import json
 import logging
-#from app import create_logfile 
-#create_logfile()
 
 def exec_script(script_path, args, session_id):
     """
@@ -40,6 +38,21 @@ def exec_script(script_path, args, session_id):
         output['exception'] = e
 
     return output
+
+def call_function(func, *args, **kwargs):
+    # For the main script calls
+    if len(args) > 2 and func.__name__ != 'query_radar_files':
+        logging.info(f"Sending {args[1]} to {args[0]}")
+
+    result = func(*args, **kwargs)
+
+    if len(result['stderr']) > 0:
+        logging.error(result['stderr'].decode('utf-8'))
+    if 'exception' in result:
+        logging.error(f"Exception {result['exception']} occurred in {
+                      func.__name__}"
+        )
+    return result
 
 def get_app_processes():
     """
@@ -166,10 +179,38 @@ def nse_status_checker(MODEL_DIR):
 
     return output, warning_text
 
-
 def file_stats(filename):
     """Return the size of a specific file.  If it doesn't exist, returns 0"""
     filesize = 0.
     if os.path.exists(filename):
         filesize = os.stat(filename).st_size / 1024000.
     return filesize
+
+def write_status_file(value: str, filename: str):
+    """
+    For monitoring individual processing script status (can't rely on dcc.Store to
+    update if function runs for more than the timeout interval).
+    """
+    with open(filename, 'w') as f: f.write(str(value))
+
+def read_status_file(filename: str):
+    status = 'idle'
+    try:
+        with open(filename, 'r') as f: 
+            status = f.read().strip().lower()
+    except Exception as e: 
+        pass 
+    return status
+
+def check_dirlist_sizes(POLLING_DIR):      
+    """
+    Checks and returns the size of all dir.list files in the polling directory. 
+    """
+    base = Path(POLLING_DIR)
+    dir_list_files = list(base.glob("*/dir.list"))
+    dir_list_sizes = {}
+    for f in dir_list_files:
+        radar_name = f.parent.name
+        size = f.stat().st_size
+        dir_list_sizes[radar_name] = size
+    return dir_list_sizes

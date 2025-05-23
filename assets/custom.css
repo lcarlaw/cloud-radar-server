@@ -1,0 +1,9 @@
+.tooltip-inner {
+    background-color: #0d1116 !important;
+    color: #ffffff !important;
+    max-width: 300px !important;
+    width: 300px !important;
+    white-space: normal;
+    text-align: center;
+    font-size: 16px;
+}

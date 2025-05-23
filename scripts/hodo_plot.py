@@ -18,6 +18,7 @@ import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 from multiprocessing import Pool, freeze_support
 from pathlib import Path
+import re
 
 #from config import RADAR_DIR, HODO_IMAGES
 import scripts.hodo_resources as hr
@@ -73,11 +74,15 @@ static_value = 70 # Enter Static Hodo Range or 999 To Not Use
 # presumes you have the radar files downloaded already
 # fixed to account for V08 files
 suffixes = ('.gz', 'V06', 'V08')
-radar_files = [f.name for f in DOWNLOADS.iterdir() if f.name.endswith(suffixes)]
-radar_filepaths = [p for p in DOWNLOADS.iterdir() if p.name.endswith(suffixes)]
-#if len(radar_files) == 0:
-#  radar_files = [f.name for f in DOWNLOADS.iterdir() if f.name.endswith('V08')]
-#  radar_filepaths = [p for p in DOWNLOADS.iterdir() if p.name.endswith('V08')]
+
+# Regex pattern to extract timestamp in form YYYYmmdd_HHMMSS. Ensures radar_filepaths list
+# is sorted by time. Updated to plot every other radar file to save some processing time.
+timestamp_pattern = re.compile(r"\d{8}_\d{6}")
+radar_filepaths = sorted(
+    [p for p in DOWNLOADS.iterdir() if p.name.endswith(suffixes)],
+    key=lambda p: datetime.strptime(timestamp_pattern.search(p.name).group(), "%Y%m%d_%H%M%S")
+)
+radar_filepaths = radar_filepaths[::2]
 
 #Surface Winds
 sfc_status = 'Preset'
@@ -194,8 +199,8 @@ def create_hodos(filename):
                 vad = pyart.retrieve.vad_browning(
                     radar_1sweep, "corrected_velocity", z_want=zlevels
                 )
-                u_allsweeps.append(vad.u_wind)
-                v_allsweeps.append(vad.v_wind)
+                u_allsweeps.append(vad.u_wind.filled(np.nan))
+                v_allsweeps.append(vad.v_wind.filled(np.nan))
             except ValueError:
                 pass
 
@@ -221,8 +226,8 @@ def create_hodos(filename):
                 vad = pyart.retrieve.vad_browning(
                     radar_1sweep, "velocity", z_want=zlevels
                 )
-                u_allsweeps.append(vad.u_wind)
-                v_allsweeps.append(vad.v_wind)
+                u_allsweeps.append(vad.u_wind.filled(np.nan))
+                v_allsweeps.append(vad.v_wind.filled(np.nan))
             except ValueError:
                 pass
 

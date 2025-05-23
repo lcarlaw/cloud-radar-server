@@ -210,7 +210,7 @@ full_upload_section = dbc.Container(
 # ----------------------------- Time/duration components  --------------------------------------
 ################################################################################################
 
-STEP_SELECT_EVENT_TIME = "Select Event Start Date, Time (in UTC), and Duration (in Minutes)"
+STEP_SELECT_EVENT_TIME = "Select Event Start Date, Time (in UTC), Duration (in Minutes) and Outputs"
 STEP_SELECT_TIME = "Select Simulation Start Date, Time (in UTC), and Duration (in Minutes)"
 
 step_select_event_time_section = dbc.Container(
@@ -229,14 +229,66 @@ step_hour = html.Div(children="Hour", style=time_headers)
 step_minute = html.Div(children="Minute", style=time_headers)
 step_duration = html.Div(children="Duration", style=time_headers)
 
+# Output options
+# Not a time selection, but makes the most sense to include in this top section. 
+PLACEFILE_TOOLTIP = "Produces LSR, surface observation, and ProbSevere placefiles."
+LSR_TOOLTIP = """
+Selecting this option adds a 10 minute delay when serving LSRs to GR. If surface 
+placefiles are turned off or "Original radar only" is selected, this option is 
+disabled."""
+NSE_TOOLTIP = "Generate near-storm environment placefiles."
+HODOGRAPH_TOOLTIP = """
+Generate hodograph images. Option is disabled if "Original radar only" is selected."""
+RADAR_TOOLTIP = """
+This option disables radar transposing and processes only the original radar files.
+Data will be available through the "Download Original Radar Files" link in the
+Facilitator Links section. Simulation playback controls, hodograph, and LSR delay 
+options will all be disabled."""
+output_selections_header = html.Div(children="Outputs", style=time_headers)
+output_selections = dbc.Col(
+    html.Div([
+    output_selections_header, html.Div([
+        dcc.Checklist(
+            options=[
+                {
+                    'label': html.Span('Surface placefiles', id='placefile_tip'),
+                    'value': 'placefiles'
+                },
+                {
+                    'label': html.Span('Add LSR delay', id='lsr_tip'),
+                    'value': 'lsr_delay'
+                },
+                {
+                    'label': html.Span('NSE placefiles', id='nse_tip'),
+                    'value': 'nse_placefiles'
+                },
+                {
+                    'label': html.Span('Hodographs', id='hodograph_tip'),
+                    'value': 'hodographs'
+                },
+                {
+                    'label': html.Span('Original radar only', id='radar_tip'),
+                    'value': 'original_radar_only'
+                },
+            ],
+            value=['placefiles', 'lsr_delay'],
+            id='output_selections'
+        ),
+        dbc.Tooltip(PLACEFILE_TOOLTIP, target='placefile_tip', placement='right'),
+        dbc.Tooltip(LSR_TOOLTIP, target='lsr_tip', placement='right'),
+        dbc.Tooltip(NSE_TOOLTIP, target='nse_tip', placement='right'),
+        dbc.Tooltip(HODOGRAPH_TOOLTIP, target='hodograph_tip', placement='right'),
+        dbc.Tooltip(RADAR_TOOLTIP, target='radar_tip', placement='right'),
+    ], id='output_selections_div', style={'display': 'block'})
+    ])
+)
 
 CONFIRM_TIMES_TEXT = "Confirm start time and duration"
 confirm_times_section = dbc.Col(
     html.Div(children=CONFIRM_TIMES_TEXT, style=confirm_start_time))
 time_settings_readout = dbc.Col(html.Div(id='show_time_data', style=feedback))
-step_time_confirm = dbc.Container(html.Div([dbc.Row([confirm_times_section, time_settings_readout
-                                                     ])]))
-
+step_time_confirm = dbc.Container(html.Div([dbc.Row([confirm_times_section, 
+                                                     time_settings_readout])]))
 radar_id = html.Div(id='radar', style={'display': 'none'})
 
 ################################################################################################
@@ -342,7 +394,10 @@ allow_transpose_section = dbc.Container(dbc.Container(
 # ----------------------------------------------------------------------------------------------
 # Skip transpose notificiation section displayed when more than one radar is selected
 # ----------------------------------------------------------------------------------------------
-STEP_SKIP_TRANSPOSE_TEXT = "Radar Transpose option skipped since more than one radar selected ..."
+STEP_SKIP_TRANSPOSE_TEXT = """
+    Radar Transpose option skipped: either more than one radar selected or 
+    'Original radar only' option selected...
+"""
 skip_transpose = dbc.Col(
     html.Div(children=STEP_SKIP_TRANSPOSE_TEXT, style=steps_center))
 skip_transpose_section = dbc.Container(dbc.Container(

@@ -274,7 +274,7 @@ def download_data(dts, data_path, model='RAP', num_hours=1,
 
     # Download requested files via separate processes
     if len(downloads.keys()) >= 1:
-        my_pool = Pool(np.clip(1, len(downloads), 4))
+        my_pool = Pool(np.clip(1, len(downloads), 2))
         my_pool.starmap(execute_download, zip(downloads.keys(), downloads.values()))
         my_pool.map(execute_regrid, downloads.keys())
         my_pool.close()
